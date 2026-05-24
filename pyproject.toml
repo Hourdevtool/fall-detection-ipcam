@@ -1,0 +1,24 @@
+[project]
+name = "buff-p"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "av>=17.0.1",
+    "edge-tts>=7.2.8",
+    "flet>=0.85.1",
+    "joblib>=1.5.3",
+    "onvif-zeep>=0.2.12",
+    "opencv-python>=4.13.0.92",
+    "pygame>=2.6.1",
+    "scikit-learn>=1.8.0",
+    "ultralytics>=8.4.53",
+    "wsdiscovery>=2.1.2",
+]
+
+[tool.pyright]
+executionEnvironments = [
+  { root = "." }
+]
+extraPaths = ["."]
