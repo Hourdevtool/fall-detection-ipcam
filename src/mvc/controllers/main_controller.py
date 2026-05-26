@@ -13,6 +13,7 @@ class MainController:
         
         # Connect callbacks
         self.network_scanner.on_camera_found = self.on_camera_found # type: ignore
+        self.view.settings_button.on_click = self.on_settings_click
         
     def start(self):
         self.network_scanner.start_scanning()
@@ -51,3 +52,13 @@ class MainController:
 
         # run_task() รันบน Flet event loop → page.update() จะ push ไปที่ client ทันที
         self.page.run_task(updater_loop)
+
+    def on_settings_click(self, e):
+        def save_callback(username, password):
+            self.network_scanner.save_credentials(username, password)
+
+        self.view.show_settings_dialog(
+            self.network_scanner.user,
+            self.network_scanner.password,
+            save_callback
+        )

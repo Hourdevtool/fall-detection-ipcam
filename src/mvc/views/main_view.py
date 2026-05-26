@@ -9,8 +9,19 @@ class MainView:
         self.page.window.maximized = True
         self.page.bgcolor = "black"
 
-        # Title
-        self.header = ft.Text("AI Security Center", size=30, weight=ft.FontWeight.BOLD, color="white")
+        # Title with settings button
+        self.header_title = ft.Text("AI Security Center", size=30, weight=ft.FontWeight.BOLD, color="white")
+        self.settings_button = ft.IconButton(
+            icon=ft.icons.SETTINGS,
+            icon_color="white",
+            icon_size=24,
+            tooltip="ตั้งค่า Username & Password",
+            on_click=None
+        )
+        self.header_row = ft.Row(
+            controls=[self.header_title, self.settings_button],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+        )
         
         # Grid for cameras
         self.camera_grid = ft.GridView(
@@ -35,7 +46,7 @@ class MainView:
 
         self.page.add(
             ft.Column([
-                ft.Container(content=self.header, padding=10),
+                ft.Container(content=self.header_row, padding=10),
                 self.content_container
             ], expand=True)
         )
@@ -118,6 +129,110 @@ class MainView:
             ], tight=True, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             actions=[
                 ft.TextButton("บันทึกชื่อกล้อง", on_click=save_clicked)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            modal=True
+        )
+
+        self.page.show_dialog(dialog)
+
+    def show_settings_dialog(self, current_username, current_password, on_save_callback):
+        username_field = ft.TextField(
+            label="Username",
+            hint_text="เช่น admin",
+            value=current_username,
+            prefix_icon=ft.icons.PERSON,
+            border_color="white24",
+            focused_border_color="blue",
+            text_style=ft.TextStyle(color="white"),
+            label_style=ft.TextStyle(color="white54"),
+            hint_style=ft.TextStyle(color="white30"),
+            expand=True
+        )
+
+        def toggle_password_visibility(e):
+            password_field.password = not password_field.password
+            password_field.reveal_password = not password_field.reveal_password
+            eye_button.icon = ft.icons.VISIBILITY_OFF if password_field.password else ft.icons.VISIBILITY
+            self.page.update()
+
+        eye_button = ft.IconButton(
+            icon=ft.icons.VISIBILITY_OFF,
+            icon_color="white54",
+            on_click=toggle_password_visibility
+        )
+
+        password_field = ft.TextField(
+            label="Password",
+            value=current_password,
+            prefix_icon=ft.icons.LOCK,
+            password=True,
+            can_reveal_password=False,
+            border_color="white24",
+            focused_border_color="blue",
+            text_style=ft.TextStyle(color="white"),
+            label_style=ft.TextStyle(color="white54"),
+            suffix=eye_button,
+            expand=True
+        )
+
+        def save_clicked(e):
+            user = username_field.value.strip() if username_field.value else ""
+            pwd = password_field.value.strip() if password_field.value else ""
+
+            if not user or not pwd:
+                snack_bar = ft.SnackBar(
+                    content=ft.Text("❌ กรุณากรอก Username และ Password ให้ครบถ้วน", color="white"),
+                    bgcolor="#D32F2F"
+                )
+                self.page.overlay.append(snack_bar)
+                snack_bar.open = True
+                self.page.update()
+                return
+
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+
+            on_save_callback(user, pwd)
+            
+            snack_bar = ft.SnackBar(
+                content=ft.Text("💾 บันทึกการตั้งค่าสำเร็จ ตัวสแกนจะใช้บัญชีใหม่นี้ทันที", color="white"),
+                bgcolor="#388E3C"
+            )
+            self.page.overlay.append(snack_bar)
+            snack_bar.open = True
+            self.page.update()
+
+        def cancel_clicked(e):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+
+        dialog = ft.AlertDialog(
+            title=ft.Row([
+                ft.Icon(ft.icons.SETTINGS, color="blue", size=28),
+                ft.Text("ตั้งค่าบัญชีกล้อง IP Camera", size=20, weight=ft.FontWeight.BOLD, color="white")
+            ], spacing=10),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text(
+                        "ระบุ Username และ Password สำหรับสแกนและดึงสตรีมภาพของกล้องในเครือข่ายวง LAN เดียวกันผ่าน ONVIF/RTSP",
+                        size=14,
+                        color="white70"
+                    ),
+                    ft.Container(height=10),
+                    username_field,
+                    ft.Container(height=10),
+                    password_field,
+                ], tight=True, width=420),
+                padding=10
+            ),
+            actions=[
+                ft.TextButton("ยกเลิก", on_click=cancel_clicked, style=ft.ButtonStyle(color="white54")),
+                ft.ElevatedButton("บันทึก", on_click=save_clicked, style=ft.ButtonStyle(color="white", bgcolor="blue")),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
             modal=True

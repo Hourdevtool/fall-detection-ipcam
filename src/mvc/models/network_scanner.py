@@ -13,8 +13,42 @@ class NetworkScanner:
         self.camera_manager = camera_manager
         # on_camera_found signature: on_camera_found(ip, rtsp_url, needs_naming, temp_img_path)
         self.on_camera_found = None
-        self.user = "admin"
-        self.password = "ctnphrae1234"
+        self.config_file = "config.json"
+        self.user, self.password = self._load_credentials()
+
+    def _load_credentials(self):
+        import json
+        import os
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    user = config.get("username", "admin")
+                    password = config.get("password", "ctnphrae1234")
+                    return user, password
+            except Exception:
+                pass
+        return "admin", "ctnphrae1234"
+
+    def save_credentials(self, user, password):
+        self.user = user
+        self.password = password
+        import json
+        import os
+        config = {}
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            except Exception:
+                pass
+        config["username"] = user
+        config["password"] = password
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"❌ Error saving config: {e}")
 
     def get_local_subnet(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
