@@ -12,7 +12,7 @@ class MainView:
         # Title with settings button
         self.header_title = ft.Text("AI Security Center", size=30, weight=ft.FontWeight.BOLD, color="white")
         self.settings_button = ft.IconButton(
-            icon=ft.icons.SETTINGS,
+            icon="settings",
             icon_color="white",
             icon_size=24,
             tooltip="ตั้งค่า Username & Password",
@@ -141,7 +141,7 @@ class MainView:
             label="Username",
             hint_text="เช่น admin",
             value=current_username,
-            prefix_icon=ft.icons.PERSON,
+            prefix_icon="person",
             border_color="white24",
             focused_border_color="blue",
             text_style=ft.TextStyle(color="white"),
@@ -153,11 +153,11 @@ class MainView:
         def toggle_password_visibility(e):
             password_field.password = not password_field.password
             password_field.reveal_password = not password_field.reveal_password
-            eye_button.icon = ft.icons.VISIBILITY_OFF if password_field.password else ft.icons.VISIBILITY
+            eye_button.icon = "visibility_off" if password_field.password else "visibility"
             self.page.update()
 
         eye_button = ft.IconButton(
-            icon=ft.icons.VISIBILITY_OFF,
+            icon="visibility_off",
             icon_color="white54",
             on_click=toggle_password_visibility
         )
@@ -165,7 +165,7 @@ class MainView:
         password_field = ft.TextField(
             label="Password",
             value=current_password,
-            prefix_icon=ft.icons.LOCK,
+            prefix_icon="lock",
             password=True,
             can_reveal_password=False,
             border_color="white24",
@@ -213,7 +213,7 @@ class MainView:
 
         dialog = ft.AlertDialog(
             title=ft.Row([
-                ft.Icon(ft.icons.SETTINGS, color="blue", size=28),
+                ft.Icon("settings", color="blue", size=28),
                 ft.Text("ตั้งค่าบัญชีกล้อง IP Camera", size=20, weight=ft.FontWeight.BOLD, color="white")
             ], spacing=10),
             content=ft.Container(
