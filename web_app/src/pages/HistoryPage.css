@@ -1,0 +1,22 @@
+.history-loading {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-date-group {
+  margin-bottom: var(--space-lg);
+}
+
+.history-date-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--glass-border);
+}

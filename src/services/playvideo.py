@@ -22,7 +22,15 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
         except Exception as e:
             print(f"⚠️ Error reading cameras.json: {e}")
 
-    detector = FallDetector()
+    # Fall event logging callback
+    def _on_fall(cam_name, frame, timestamp):
+        try:
+            from api_server.fall_logger import log_fall_event
+            log_fall_event(ip, cam_name, frame, timestamp)
+        except Exception as e:
+            print(f"⚠️ Fall logging error: {e}")
+
+    detector = FallDetector(on_fall_callback=_on_fall)
 
     container = None
     av_options_list = [

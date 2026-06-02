@@ -1,0 +1,42 @@
+.pair-code-input {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.pair-code-digit {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 2px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  caret-color: var(--accent);
+}
+
+.pair-code-digit:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.pair-code-digit.filled {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+
+/* Mobile-friendly sizing */
+@media (max-width: 380px) {
+  .pair-code-digit {
+    width: 42px;
+    height: 50px;
+    font-size: 20px;
+  }
+  
+  .pair-code-input {
+    gap: 6px;
+  }
+}

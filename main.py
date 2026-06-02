@@ -9,4 +9,4 @@ if __name__ == "__main__":
     import multiprocessing
     # Required for Windows multiprocessing
     multiprocessing.freeze_support()
-    ft.app(target=main)
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8550)

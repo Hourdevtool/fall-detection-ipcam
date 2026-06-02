@@ -13,7 +13,7 @@ import tempfile
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 class FallDetector:
-    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.7, fall_trigger_frames=10):
+    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.7, fall_trigger_frames=10, on_fall_callback=None):
         # ใช้ absolute path เพื่อให้ subprocess หาไฟล์เจอเสมอ
         if yolo_path is None:
             yolo_path = os.path.join(_PROJECT_ROOT,"Tools", "yolov8n-pose.pt")
@@ -39,6 +39,8 @@ class FallDetector:
         self.fall_counter = 0
         self.status = 'normal'
         self.color = (0, 255, 0)
+        self.on_fall_callback = on_fall_callback
+        self._fall_callback_fired = False  # ป้องกันเรียก callback ซ้ำ
         
         # Audio playback initialization
         try:
@@ -146,9 +148,17 @@ class FallDetector:
                 self.status = '!!! FALL DETECTED !!!'
                 self.color = (0, 0, 255) # Red
                 self.async_play_alert(camera_name)
+                # Fire fall callback (once per fall event)
+                if self.on_fall_callback and not self._fall_callback_fired:
+                    self._fall_callback_fired = True
+                    try:
+                        self.on_fall_callback(camera_name, frame, time.time())
+                    except Exception as e:
+                        print(f"❌ Fall callback error: {e}")
              else:
                  self.status = 'normal'
                  self.color = (0, 255, 0) # Green
+                 self._fall_callback_fired = False  # Reset for next fall
             
              cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
              cv2.putText(frame, f"Status: {self.status}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)

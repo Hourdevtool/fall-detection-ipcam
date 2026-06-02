@@ -1,0 +1,120 @@
+.pair-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: var(--space-lg);
+}
+
+.pair-content {
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+}
+
+.pair-header {
+  margin-bottom: var(--space-xl);
+}
+
+.pair-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: var(--space-md);
+}
+
+.pair-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: var(--space-sm);
+}
+
+.pair-subtitle {
+  font-size: 14px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.pair-input-section {
+  margin-bottom: var(--space-xl);
+}
+
+.pair-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: var(--space-md);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.pair-error {
+  margin-top: var(--space-md);
+  padding: 10px 16px;
+  background: var(--danger-glow);
+  border: 1px solid rgba(255, 71, 87, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Success */
+.pair-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.pair-success-icon {
+  font-size: 64px;
+}
+
+.pair-success-title {
+  font-size: 24px;
+  font-weight: 700;
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.pair-success-text {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+/* Help section */
+.pair-help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  text-align: left;
+  padding: var(--space-lg);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+}
+
+.pair-help-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.pair-help-step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-glow);
+  color: var(--accent-light);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}

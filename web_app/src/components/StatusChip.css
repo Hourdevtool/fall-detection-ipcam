@@ -1,0 +1,40 @@
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-normal {
+  background: rgba(0, 212, 170, 0.1);
+  color: var(--teal);
+}
+
+.status-danger {
+  background: rgba(255, 71, 87, 0.12);
+  color: var(--danger);
+  animation: glow-danger 2s ease-in-out infinite;
+}
+
+.status-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-normal .status-chip-dot {
+  background: var(--teal);
+}
+
+.status-danger .status-chip-dot {
+  background: var(--danger);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes glow-danger {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: 0 0 12px var(--danger-glow); }
+}

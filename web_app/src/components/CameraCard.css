@@ -1,0 +1,72 @@
+.camera-card {
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.camera-card-alert {
+  border-color: rgba(255, 71, 87, 0.3) !important;
+  box-shadow: 0 0 20px var(--danger-glow), inset 0 0 20px var(--danger-glow) !important;
+}
+
+.camera-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.camera-card-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.camera-card-icon {
+  font-size: 16px;
+}
+
+.camera-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.camera-card-feed {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.camera-card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.15s ease;
+}
+
+.camera-card-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.camera-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+
+.camera-card-ip {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
