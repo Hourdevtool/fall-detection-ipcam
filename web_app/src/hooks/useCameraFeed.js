@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { getFrames, getCameras } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 
 /**
  * Hook for polling live camera frames.
@@ -7,6 +8,7 @@ import { getFrames, getCameras } from '../lib/api';
  * @param {boolean} enabled - Whether polling is active
  */
 export function useCameraFeed(intervalMs = 1500, enabled = true) {
+  const { activeDevice } = useAuth();
   const [frames, setFrames] = useState({});
   const [cameras, setCameras] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -14,10 +16,17 @@ export function useCameraFeed(intervalMs = 1500, enabled = true) {
   const intervalRef = useRef(null);
 
   const fetchData = useCallback(async () => {
+    if (!activeDevice) {
+      setFrames({});
+      setCameras([]);
+      setLoading(false);
+      return;
+    }
+    
     try {
       const [framesData, camerasData] = await Promise.all([
-        getFrames(),
-        getCameras(),
+        getFrames(activeDevice),
+        getCameras(activeDevice),
       ]);
       setFrames(framesData);
       setCameras(camerasData);
@@ -27,10 +36,13 @@ export function useCameraFeed(intervalMs = 1500, enabled = true) {
       setError(err.message);
       setLoading(false);
     }
-  }, []);
+  }, [activeDevice]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !activeDevice) {
+      setLoading(false);
+      return;
+    }
 
     // Initial fetch
     fetchData();
@@ -43,7 +55,8 @@ export function useCameraFeed(intervalMs = 1500, enabled = true) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [enabled, intervalMs, fetchData]);
+  }, [enabled, intervalMs, fetchData, activeDevice]);
 
   return { frames, cameras, loading, error };
 }
+

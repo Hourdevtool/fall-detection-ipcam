@@ -8,38 +8,39 @@ import json
 SYSTEM_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "system_config.json")
 
 
+def _load_config() -> dict:
+    """Load configuration from system_config.json."""
+    config_path = os.path.abspath(SYSTEM_CONFIG_PATH)
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_config(config: dict):
+    """Save configuration to system_config.json."""
+    config_path = os.path.abspath(SYSTEM_CONFIG_PATH)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
+
 def get_or_create_system_id() -> str:
     """
     Get or create a persistent system ID.
     This identifies THIS detection system instance.
     Stored in system_config.json so it persists across restarts.
     """
-    config_path = os.path.abspath(SYSTEM_CONFIG_PATH)
-
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                if "system_id" in config:
-                    return config["system_id"]
-        except Exception:
-            pass
+    config = _load_config()
+    if "system_id" in config:
+        return config["system_id"]
 
     # Generate new system ID
     system_id = uuid.uuid4().hex[:8]
-
-    config = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-        except Exception:
-            pass
-
     config["system_id"] = system_id
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=4)
+    _save_config(config)
 
     print(f"🆔 Generated new system ID: {system_id}")
     return system_id
@@ -50,64 +51,64 @@ def generate_pair_code() -> str:
     return "".join(random.choices(string.digits, k=6))
 
 
-# ── In-memory active pairing codes (simple approach) ──
-
-_active_codes: dict[str, dict] = {}
-
-
 def create_new_pair_code(system_id: str, expires_in: int = 600) -> dict:
     """
-    Create a new pairing code that expires in `expires_in` seconds.
-    Returns {code, system_id, expires_at, expires_in}.
+    Create or retrieve a persistent pairing code.
+    (We ignore expires_in and keep the code persistent)
     """
-    # Clean up expired codes
-    now = time.time()
-    expired = [c for c, v in _active_codes.items() if v["expires_at"] < now]
-    for c in expired:
-        del _active_codes[c]
-
-    # Generate unique code
-    code = generate_pair_code()
-    while code in _active_codes:
+    config = _load_config()
+    if "pair_code" in config:
+        code = config["pair_code"]
+    else:
         code = generate_pair_code()
+        config["pair_code"] = code
+        _save_config(config)
 
     entry = {
         "code": code,
         "system_id": system_id,
-        "created_at": now,
-        "expires_at": now + expires_in,
-        "expires_in": expires_in,
+        "created_at": time.time(),
+        "expires_at": 2147483647,  # Never expires
+        "expires_in": 2147483647,
     }
-    _active_codes[code] = entry
-    print(f"🔗 Pairing code generated: {code} (expires in {expires_in}s)")
     return entry
 
 
 def validate_pair_code(code: str) -> dict | None:
     """
-    Validate a pairing code. Returns the entry if valid, None if invalid/expired.
-    Consumes the code (one-time use).
+    Validate a pairing code against the persistent config.
+    Returns the entry if valid, None if invalid.
+    Does NOT consume the code (persistent).
     """
-    now = time.time()
+    config = _load_config()
+    stored_code = config.get("pair_code")
+    system_id = config.get("system_id")
 
-    if code not in _active_codes:
-        return None
-
-    entry = _active_codes[code]
-    if entry["expires_at"] < now:
-        del _active_codes[code]
-        return None
-
-    # Consume the code
-    del _active_codes[code]
-    return entry
+    if stored_code and stored_code == code and system_id:
+        return {
+            "code": stored_code,
+            "system_id": system_id,
+            "created_at": time.time(),
+            "expires_at": 2147483647,
+            "expires_in": 2147483647,
+        }
+    return None
 
 
 def get_current_pair_code(system_id: str) -> dict | None:
-    """Get the current active (non-expired) pairing code for this system."""
-    now = time.time()
-    for code, entry in _active_codes.items():
-        if entry["system_id"] == system_id and entry["expires_at"] > now:
-            remaining = int(entry["expires_at"] - now)
-            return {**entry, "expires_in": remaining}
+    """Get the current persistent pairing code for this system."""
+    config = _load_config()
+    stored_code = config.get("pair_code")
+    
+    if not stored_code:
+        return create_new_pair_code(system_id)
+        
+    if config.get("system_id") == system_id:
+        return {
+            "code": stored_code,
+            "system_id": system_id,
+            "created_at": time.time(),
+            "expires_at": 2147483647,
+            "expires_in": 2147483647,
+        }
     return None

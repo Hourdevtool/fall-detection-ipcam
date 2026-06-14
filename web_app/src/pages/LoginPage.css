@@ -128,6 +128,19 @@
   transform: none;
 }
 
+.login-google-btn.disabled-config {
+  background: var(--surface) !important;
+  border: 1px dashed var(--glass-border) !important;
+  color: var(--text-3) !important;
+  box-shadow: none !important;
+}
+
+.login-google-btn.disabled-config:hover {
+  background: var(--glass-hover) !important;
+  color: var(--text-2) !important;
+  transform: none !important;
+}
+
 .google-icon {
   flex-shrink: 0;
 }

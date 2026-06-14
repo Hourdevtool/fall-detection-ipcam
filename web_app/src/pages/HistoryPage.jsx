@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import FallEventCard from '../components/FallEventCard';
 import { getFallEvents } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import './HistoryPage.css';
 
 const FILTERS = [
@@ -53,20 +54,35 @@ function groupByDate(events) {
 }
 
 export default function HistoryPage() {
+  const { activeDevice } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('today');
 
   useEffect(() => {
     fetchEvents();
-  }, [activeFilter]);
+  }, [activeFilter, activeDevice]);
 
   async function fetchEvents() {
+    if (!activeDevice) {
+      setEvents([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const range = getDateRange(activeFilter);
-      const data = await getFallEvents({ ...range, limit: 100 });
-      setEvents(data.events || []);
+      const data = await getFallEvents({ ...range, limit: 100, device: activeDevice });
+      
+      // Prefix snapshot URL with the device's IP so it fetches from the correct device
+      const deviceIp = activeDevice.ip.startsWith('http') ? activeDevice.ip : `http://${activeDevice.ip}`;
+      const mappedEvents = (data.events || []).map(event => ({
+        ...event,
+        snapshot_url: event.snapshot_url ? `${deviceIp}${event.snapshot_url}` : null
+      }));
+
+      setEvents(mappedEvents);
     } catch (err) {
       console.error('Error fetching fall events:', err);
       setEvents([]);
@@ -82,7 +98,9 @@ export default function HistoryPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">📋 ประวัติการล้ม</h1>
-        <p className="page-subtitle">ดูเหตุการณ์การล้มที่ระบบตรวจพบ</p>
+        <p className="page-subtitle">
+          {activeDevice ? `ดูเหตุการณ์การล้มของ ${activeDevice.name}` : 'กรุณาเพิ่มอุปกรณ์ก่อน'}
+        </p>
       </div>
 
       {/* Filter */}
@@ -99,7 +117,13 @@ export default function HistoryPage() {
       </div>
 
       {/* Events List */}
-      {loading ? (
+      {!activeDevice ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">📡</div>
+          <div className="empty-state-title">กรุณาเลือกหรือจับคู่อุปกรณ์</div>
+          <div className="empty-state-text">กรุณาทำการจับคู่อุปกรณ์ก่อนเพื่อดูประวัติการล้ม</div>
+        </div>
+      ) : loading ? (
         <div className="history-loading">
           {[1, 2, 3].map((i) => (
             <div key={i} className="skeleton" style={{ height: 120, borderRadius: 16, marginBottom: 16 }} />
@@ -134,3 +158,4 @@ export default function HistoryPage() {
     </div>
   );
 }
+

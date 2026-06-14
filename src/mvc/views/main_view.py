@@ -9,8 +9,18 @@ class MainView:
         self.page.window.maximized = True
         self.page.bgcolor = "black"
 
-        # Title with settings button
+        # Title with settings and code buttons
         self.header_title = ft.Text("AI Security Center", size=30, weight=ft.FontWeight.BOLD, color="white")
+        
+        self.show_code_button = ft.IconButton(
+            icon=ft.Icons.QR_CODE,
+            icon_color="amber",
+            icon_size=24,
+            tooltip="แสดงรหัสเชื่อมต่อ (Pairing Code)",
+            visible=False,
+            on_click=None
+        )
+        
         self.settings_button = ft.IconButton(
             icon=ft.Icons.SETTINGS,
             icon_color="white",
@@ -19,7 +29,7 @@ class MainView:
             on_click=None
         )
         self.header_row = ft.Row(
-            controls=[self.header_title, self.settings_button],
+            controls=[self.header_title, ft.Row([self.show_code_button, self.settings_button])],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN
         )
         
@@ -44,15 +54,55 @@ class MainView:
             expand=True
         )
 
+        # Pairing code container (initially hidden or visible)
+        self.pair_code_text = ft.Text("", size=40, weight=ft.FontWeight.W_900, color="amber400")
+        self.pairing_banner = ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(ft.Icons.PHONELINK_SETUP, color="amber400", size=28),
+                    ft.Text("รหัสสำหรับเชื่อมต่อแอปมือถือ (Pairing Code)", size=18, color="white", weight=ft.FontWeight.BOLD),
+                ], alignment=ft.MainAxisAlignment.CENTER),
+                ft.Container(
+                    content=self.pair_code_text,
+                    bgcolor="black45",
+                    padding=15,
+                    border_radius=8,
+                ),
+                ft.Text("นำรหัส 6 หลักนี้ไปกรอกใน Web App เพื่อดูภาพจากกล้อง", size=14, color="white70"),
+            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            bgcolor="#1A1A1A",
+            border=ft.Border(
+                top=ft.BorderSide(2, "amber700"),
+                right=ft.BorderSide(2, "amber700"),
+                bottom=ft.BorderSide(2, "amber700"),
+                left=ft.BorderSide(2, "amber700")
+            ),
+            border_radius=15,
+            padding=20,
+            margin=ft.Margin(left=10, right=10, bottom=20, top=10),
+            visible=False # Hidden by default, controller will show if not paired
+        )
+
         self.page.add(
             ft.Column([
                 ft.Container(content=self.header_row, padding=10),
+                self.pairing_banner,
                 self.content_container
             ], expand=True)
         )
 
         # Dictionary to store Image controls per IP
         self.camera_images = {}
+
+    def show_pairing_code(self, code):
+        self.pair_code_text.value = f" {code} "
+        self.pairing_banner.visible = True
+        self.page.update()
+
+    def hide_pairing_code(self):
+        self.pairing_banner.visible = False
+        self.page.update()
+
 
     def update_grid(self, base64_frames):
         needs_page_update = False

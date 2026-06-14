@@ -7,8 +7,8 @@ import App from './App';
 import './index.css';
 
 // Google OAuth Client ID — replace with your own from Google Cloud Console
-// Leave empty string for development mode (will show dev login button)
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+// Use a dummy Client ID as fallback if empty to prevent GoogleOAuthProvider from throwing an error
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '100000000000-dummyid1234567890.apps.googleusercontent.com';
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

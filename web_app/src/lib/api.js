@@ -5,7 +5,9 @@ const API_BASE = '';  // Empty string = same origin (uses Vite proxy in dev)
  * Automatically adds JWT token from localStorage.
  */
 async function apiFetch(path, options = {}) {
-  const token = localStorage.getItem('fallguard_token');
+  // Use device-specific apiBase and token if provided, fallback to localStorage
+  const apiBase = options.apiBase || API_BASE;
+  const token = options.token || localStorage.getItem('fallguard_token');
 
   const headers = {
     'Content-Type': 'application/json',
@@ -16,16 +18,19 @@ async function apiFetch(path, options = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const cleanApiBase = apiBase && !apiBase.startsWith('http') ? `http://${apiBase}` : apiBase;
+  const response = await fetch(`${cleanApiBase}${path}`, {
     ...options,
     headers,
   });
 
   if (response.status === 401) {
-    // Token expired or invalid
-    localStorage.removeItem('fallguard_token');
-    localStorage.removeItem('fallguard_user');
-    window.location.href = '/login';
+    // Only clear main token if it failed on the main host
+    if (!options.apiBase) {
+      localStorage.removeItem('fallguard_token');
+      localStorage.removeItem('fallguard_user');
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
 
@@ -39,51 +44,73 @@ async function apiFetch(path, options = {}) {
 
 // ── Auth ──
 
-export async function loginWithGoogle(credential) {
+export async function loginWithGoogle(credential, apiBase = '') {
   return apiFetch('/api/auth/google', {
     method: 'POST',
     body: JSON.stringify({ credential }),
+    apiBase,
   });
 }
 
-export async function getMe() {
-  return apiFetch('/api/auth/me');
+export async function getMe(device = null) {
+  return apiFetch('/api/auth/me', {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
 // ── Pairing ──
 
-export async function getPairStatus() {
-  return apiFetch('/api/pair/status');
-}
-
-export async function submitPairCode(code) {
-  return apiFetch('/api/pair', {
-    method: 'POST',
-    body: JSON.stringify({ code }),
+export async function getPairStatus(device = null) {
+  return apiFetch('/api/pair/status', {
+    apiBase: device?.ip,
+    token: device?.token,
   });
 }
 
-export async function unpair() {
-  return apiFetch('/api/pair', { method: 'DELETE' });
+export async function submitPairCode(code, device = null) {
+  return apiFetch('/api/pair', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+    apiBase: device?.ip,
+    token: device?.token,
+  });
+}
+
+export async function unpair(device = null) {
+  return apiFetch('/api/pair', { 
+    method: 'DELETE',
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
 // ── Cameras ──
 
-export async function getCameras() {
-  return apiFetch('/api/cameras');
+export async function getCameras(device = null) {
+  return apiFetch('/api/cameras', {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
-export async function getFrames() {
-  return apiFetch('/api/frames');
+export async function getFrames(device = null) {
+  return apiFetch('/api/frames', {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
-export async function getSingleFrame(ip) {
-  return apiFetch(`/api/frames/${ip}`);
+export async function getSingleFrame(ip, device = null) {
+  return apiFetch(`/api/frames/${ip}`, {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
 // ── Fall Events ──
 
-export async function getFallEvents({ limit = 50, offset = 0, camera, dateFrom, dateTo } = {}) {
+export async function getFallEvents({ limit = 50, offset = 0, camera, dateFrom, dateTo, device = null } = {}) {
   const params = new URLSearchParams();
   if (limit) params.set('limit', limit);
   if (offset) params.set('offset', offset);
@@ -91,11 +118,18 @@ export async function getFallEvents({ limit = 50, offset = 0, camera, dateFrom, 
   if (dateFrom) params.set('date_from', dateFrom);
   if (dateTo) params.set('date_to', dateTo);
 
-  return apiFetch(`/api/fall-events?${params.toString()}`);
+  return apiFetch(`/api/fall-events?${params.toString()}`, {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
 
 // ── Status ──
 
-export async function getSystemStatus() {
-  return apiFetch('/api/status');
+export async function getSystemStatus(device = null) {
+  return apiFetch('/api/status', {
+    apiBase: device?.ip,
+    token: device?.token,
+  });
 }
+

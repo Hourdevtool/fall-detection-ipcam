@@ -2,34 +2,23 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCameraFeed } from '../hooks/useCameraFeed';
-import { getPairStatus } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import CameraCard from '../components/CameraCard';
 import './DashboardPage.css';
 
 export default function DashboardPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, devices, activeDevice, selectDevice, removeDevice } = useAuth();
   const navigate = useNavigate();
-  const [paired, setPaired] = useState(null); // null = loading
-  const { frames, cameras, loading, error } = useCameraFeed(1500, paired === true);
+  const { frames, cameras, loading, error } = useCameraFeed(1500, !!activeDevice);
 
   // Check pairing status on mount
   useEffect(() => {
-    getPairStatus()
-      .then((status) => {
-        if (!status.is_paired) {
-          navigate('/pair', { replace: true });
-        } else {
-          setPaired(true);
-        }
-      })
-      .catch(() => {
-        // API might not be available; allow access anyway in dev
-        setPaired(true);
-      });
-  }, [navigate]);
+    if (devices.length === 0) {
+      navigate('/pair', { replace: true });
+    }
+  }, [devices, navigate]);
 
-  if (paired === null) {
+  if (devices.length === 0 || !activeDevice) {
     return (
       <div className="page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <div className="spinner" />
@@ -46,10 +35,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="page-title">🛡️ Fall Guard</h1>
           <p className="page-subtitle">
-            {cameras.length > 0
-              ? `${cameras.length} กล้องออนไลน์`
-              : 'กำลังค้นหากล้อง...'
-            }
+            {activeDevice ? `อุปกรณ์: ${activeDevice.name}` : 'กำลังค้นหากล้อง...'}
           </p>
         </div>
         <button className="dashboard-avatar" onClick={logout} title="ออกจากระบบ">
@@ -61,6 +47,49 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Device Selector */}
+      <div className="device-selector-section">
+        <h2 className="section-title">📍 อุปกรณ์ตรวจจับ</h2>
+        <div className="device-list">
+          {devices.map((dev) => (
+            <div 
+              key={dev.id} 
+              className={`device-card glass-card ${activeDevice.id === dev.id ? 'active' : ''}`}
+              onClick={() => selectDevice(dev)}
+            >
+              <div className="device-info">
+                <span className="device-name">🖥️ {dev.name}</span>
+                <span className="device-ip">{dev.ip}</span>
+              </div>
+              <button 
+                className="device-delete-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm(`คุณต้องการลบอุปกรณ์ "${dev.name}" ใช่หรือไม่?`)) {
+                    removeDevice(dev.id);
+                  }
+                }}
+                title="ลบอุปกรณ์"
+              >
+                🗑️
+              </button>
+            </div>
+          ))}
+          
+          {/* Add Device Button */}
+          <div 
+            className="device-card add-device-card glass-card"
+            onClick={() => navigate('/pair')}
+          >
+            <span className="add-device-icon">➕</span>
+            <span className="add-device-text">เพิ่มอุปกรณ์</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Camera Grid header */}
+      <h2 className="section-title" style={{ marginTop: 16 }}>📹 กล้องวงจรปิด ({cameras.length})</h2>
+
       {/* Camera Grid */}
       {loading && cameraEntries.length === 0 ? (
         <div className="dashboard-loading">
@@ -70,15 +99,15 @@ export default function DashboardPage() {
       ) : cameraEntries.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">📡</div>
-          <div className="empty-state-title">ไม่พบกล้อง</div>
+          <div className="empty-state-title">ไม่พบกล้องของอุปกรณ์นี้</div>
           <div className="empty-state-text">
-            ระบบกำลังสแกนหากล้องในเครือข่าย<br />กรุณารอสักครู่...
+            ระบบกำลังสแกนหากล้องในเครือข่ายของ {activeDevice.name}<br />กรุณารอสักครู่...
           </div>
         </div>
       ) : (
         <motion.div className="camera-grid" layout>
           <AnimatePresence>
-            {cameraEntries.map(([ip, frame], index) => {
+            {cameraEntries.map(([ip, frame]) => {
               const camera = cameras.find((c) => c.ip === ip);
               return (
                 <CameraCard
@@ -96,9 +125,10 @@ export default function DashboardPage() {
 
       {error && (
         <div className="dashboard-error">
-          ⚠️ {error}
+          ⚠️ ไม่สามารถเชื่อมต่อกับอุปกรณ์ได้ ({error})
         </div>
       )}
     </div>
   );
 }
+

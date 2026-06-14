@@ -2,25 +2,37 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import PairCodeInput from '../components/PairCodeInput';
-import { submitPairCode } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import './PairPage.css';
 
 export default function PairPage() {
   const navigate = useNavigate();
+  const { pairNewDevice, devices } = useAuth();
+  
+  const [deviceName, setDeviceName] = useState('');
+  const [deviceIp, setDeviceIp] = useState(window.location.host); // Pre-fill with current host
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
   async function handleComplete(code) {
+    if (!deviceName.trim()) {
+      setError('กรุณากรอกชื่ออุปกรณ์');
+      return;
+    }
+    if (!deviceIp.trim()) {
+      setError('กรุณากรอก IP / Host ของอุปกรณ์');
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
-      await submitPairCode(code);
+      await pairNewDevice(deviceName.trim(), deviceIp.trim(), code);
       setSuccess(true);
-      // Navigate to dashboard after brief animation
       setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
     } catch (err) {
-      setError(err.message || 'รหัสไม่ถูกต้องหรือหมดอายุ');
+      setError(err.message || 'รหัสไม่ถูกต้อง หรือไม่สามารถเชื่อมต่ออุปกรณ์ได้');
     } finally {
       setLoading(false);
     }
@@ -50,48 +62,87 @@ export default function PairPage() {
             {/* Header */}
             <div className="pair-header">
               <span className="pair-icon">🔗</span>
-              <h1 className="pair-title">จับคู่อุปกรณ์</h1>
+              <h1 className="pair-title">เพิ่ม/จับคู่อุปกรณ์ใหม่</h1>
               <p className="pair-subtitle">
-                กรอกรหัส 6 หลักที่แสดงบนหน้าจอของระบบตรวจจับ<br />
-                เพื่อเชื่อมต่อกับอุปกรณ์ของคุณ
+                เชื่อมต่อระบบตรวจจับกล้องเพื่อติดตามผ่านมือถือ
               </p>
             </div>
 
-            {/* Code Input */}
-            <div className="pair-input-section">
-              <PairCodeInput onComplete={handleComplete} />
-              
-              {loading && (
-                <div className="pair-loading">
-                  <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
-                  <span>กำลังตรวจสอบ...</span>
-                </div>
-              )}
+            {/* Inputs */}
+            <div className="pair-form">
+              <div className="pair-form-group">
+                <label className="pair-form-label">ชื่ออุปกรณ์ / สถานที่</label>
+                <input
+                  type="text"
+                  className="pair-form-input"
+                  placeholder="เช่น บ้านคุณยาย, ห้องนั่งเล่น"
+                  value={deviceName}
+                  onChange={(e) => setDeviceName(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
 
-              {error && (
-                <motion.p
-                  className="pair-error"
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                >
-                  ❌ {error}
-                </motion.p>
-              )}
+              <div className="pair-form-group">
+                <label className="pair-form-label">IP Address / URL อุปกรณ์</label>
+                <input
+                  type="text"
+                  className="pair-form-input"
+                  placeholder="เช่น 192.168.1.121:8000"
+                  value={deviceIp}
+                  onChange={(e) => setDeviceIp(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+
+              {/* Code Input */}
+              <div className="pair-input-section">
+                <label className="pair-form-label" style={{ marginBottom: 12 }}>กรอกรหัสจับคู่ 6 หลัก</label>
+                <PairCodeInput onComplete={handleComplete} />
+                
+                {loading && (
+                  <div className="pair-loading">
+                    <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
+                    <span>กำลังเชื่อมต่อและตรวจสอบ...</span>
+                  </div>
+                )}
+
+                {error && (
+                  <motion.p
+                    className="pair-error"
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    ❌ {error}
+                  </motion.p>
+                )}
+              </div>
             </div>
 
+            {/* Actions */}
+            {devices.length > 0 && (
+              <button
+                type="button"
+                className="pair-cancel-btn"
+                onClick={() => navigate('/dashboard')}
+                disabled={loading}
+              >
+                ย้อนกลับ
+              </button>
+            )}
+
             {/* Help text */}
-            <div className="pair-help">
+            <div className="pair-help" style={{ marginTop: 24 }}>
               <div className="pair-help-item">
                 <span className="pair-help-step">1</span>
                 <span>เปิดระบบ Fall Guard บนคอมพิวเตอร์</span>
               </div>
               <div className="pair-help-item">
                 <span className="pair-help-step">2</span>
-                <span>ดูรหัส 6 หลักที่แสดงบนหน้าจอ</span>
+                <span>ดู IP ของเครื่อง และรหัส 6 หลักบนจอภาพ</span>
               </div>
               <div className="pair-help-item">
                 <span className="pair-help-step">3</span>
-                <span>กรอกรหัสในช่องด้านบน</span>
+                <span>กรอกข้อมูลด้านบนเพื่อเพิ่มอุปกรณ์</span>
               </div>
             </div>
           </>
@@ -100,3 +151,4 @@ export default function PairPage() {
     </div>
   );
 }
+

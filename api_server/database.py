@@ -242,3 +242,20 @@ def get_fall_event_by_id(event_id: int) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def is_system_paired(system_id: str) -> bool:
+    """Check if this system has any active user pairings."""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM pairings WHERE system_id = ? AND is_active = 1",
+            (system_id,)
+        )
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
