@@ -7,7 +7,7 @@ import CameraCard from '../components/CameraCard';
 import './DashboardPage.css';
 
 export default function DashboardPage() {
-  const { user, logout, devices, activeDevice, selectDevice, removeDevice } = useAuth();
+  const { user, logout, devices, activeDevice, selectDevice, removeDevice, updateDeviceName } = useAuth();
   const navigate = useNavigate();
   const { frames, cameras, loading, error } = useCameraFeed(1500, !!activeDevice);
 
@@ -17,6 +17,14 @@ export default function DashboardPage() {
       navigate('/pair', { replace: true });
     }
   }, [devices, navigate]);
+
+  const handleEditDeviceName = (e, dev) => {
+    e.stopPropagation();
+    const newName = prompt('กรุณาป้อนชื่ออุปกรณ์ใหม่:', dev.name);
+    if (newName && newName.trim() !== '' && newName !== dev.name) {
+      updateDeviceName(dev.id, newName.trim());
+    }
+  };
 
   if (devices.length === 0 || !activeDevice) {
     return (
@@ -58,14 +66,24 @@ export default function DashboardPage() {
               onClick={() => selectDevice(dev)}
             >
               <div className="device-info">
-                <span className="device-name">🖥️ {dev.name}</span>
+                <span className="device-name">
+                  🖥️ {dev.name}
+                  <button 
+                    className="device-edit-btn" 
+                    onClick={(e) => handleEditDeviceName(e, dev)}
+                    title="แก้ไขชื่ออุปกรณ์"
+                    style={{ marginLeft: '8px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px' }}
+                  >
+                    ✏️
+                  </button>
+                </span>
                 <span className="device-ip">{dev.ip}</span>
               </div>
               <button 
                 className="device-delete-btn"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (confirm(`คุณต้องการลบอุปกรณ์ "${dev.name}" ใช่หรือไม่?`)) {
+                  if (confirm(`คุณต้องการลบอุปกรณ์ "${dev.name}" ใช่หรือไม่?\n(รหัสเชื่อมต่อจะถูกรีเซ็ต ต้องดูรหัสใหม่ที่หน้าจอ Mini PC เพื่อเชื่อมต่ออีกครั้ง)`)) {
                     removeDevice(dev.id);
                   }
                 }}

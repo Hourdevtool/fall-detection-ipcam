@@ -5,6 +5,13 @@ import time
 import sys
 import threading
 import os
+import json
+from dotenv import load_dotenv
+import requests
+import time
+import sys
+import threading
+import os
 from dotenv import load_dotenv
 
 # โหลดค่าจากไฟล์ .env
@@ -16,8 +23,8 @@ load_dotenv()
 # นำมาจาก Firebase Console -> Project Settings -> Service accounts -> Database secrets หรือใช้ URL ตรงๆ
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "https://YOUR-FIREBASE-PROJECT-ID.firebaseio.com")
 
-# ชื่อตัวแปร (Node) ใน Database ที่ต้องการให้เก็บ URL
-DATABASE_NODE = os.getenv("DATABASE_NODE", "/cloudflare_tunnel.json")
+# ชื่อตัวแปร (Node) หลักใน Database
+DATABASE_NODE_PREFIX = "/pair_codes"
 
 # พอร์ตของ API Server ที่รันอยู่ (ใน main.py รันที่พอร์ต 8000)
 LOCAL_PORT = int(os.getenv("LOCAL_PORT", "8000"))
@@ -25,16 +32,37 @@ LOCAL_PORT = int(os.getenv("LOCAL_PORT", "8000"))
 # ==========================================
 
 def update_firebase(url):
-    """ฟังก์ชันสำหรับอัปเดต URL ไปยัง Firebase Realtime Database"""
+    """ฟังก์ชันสำหรับอัปเดต URL ไปยัง Firebase Realtime Database แบบแยกตามอุปกรณ์"""
     try:
-        firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE}"
-        data = {"url": url, "updated_at": time.time()}
+        # 1. อ่านไฟล์ system_config.json เพื่อดึง pair_code และ system_id
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_config.json")
+        system_id = "unknown"
+        pair_code = "unknown"
+        
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                system_id = config.get("system_id", "unknown")
+                pair_code = config.get("pair_code", "unknown")
+                
+        if pair_code == "unknown":
+            print("❌ [ERROR] ไม่พบ pair_code ใน system_config.json กรุณารันระบบหลักเพื่อสร้างรหัสก่อน")
+            return
+
+        # 2. ตั้ง URL ปลายทางไปที่โฟลเดอร์ของตัวเอง
+        firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE_PREFIX}/{pair_code}.json"
+        
+        data = {
+            "url": url, 
+            "system_id": system_id,
+            "updated_at": time.time()
+        }
         
         # ส่ง HTTP PUT ไปยัง Firebase Realtime Database
         response = requests.put(firebase_url, json=data)
         
         if response.status_code == 200:
-            print(f"✅ [SUCCESS] อัปเดต URL ไปที่ Firebase สำเร็จ: {url}")
+            print(f"✅ [SUCCESS] อัปเดต URL ประจำกล้อง (รหัส: {pair_code}) ไปที่ Firebase สำเร็จ: {url}")
         else:
             print(f"❌ [ERROR] ไม่สามารถอัปเดต Firebase ได้. Status Code: {response.status_code}")
             print(response.text)

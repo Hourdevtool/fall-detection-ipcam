@@ -20,15 +20,22 @@ export default function PairPage() {
       setError('กรุณากรอกชื่ออุปกรณ์');
       return;
     }
-    if (!deviceIp.trim()) {
-      setError('กรุณากรอก IP / Host ของอุปกรณ์');
-      return;
-    }
 
     setLoading(true);
     setError('');
     try {
-      await pairNewDevice(deviceName.trim(), deviceIp.trim(), code);
+      // 1. ค้นหา Cloudflare URL จาก Firebase โดยใช้รหัส 6 หลัก
+      const fbRes = await fetch(`https://fall-detect-832f6-default-rtdb.asia-southeast1.firebasedatabase.app/pair_codes/${code}.json`);
+      const fbData = await fbRes.json();
+
+      if (!fbData || !fbData.url) {
+        throw new Error('ไม่พบข้อมูลอุปกรณ์นี้ หรืออุปกรณ์ยังไม่ได้เปิดระบบเชื่อมต่อออนไลน์ (Cloudflare)');
+      }
+
+      const cloudflareUrl = fbData.url;
+
+      // 2. ส่งข้อมูลไปที่ AuthContext เพื่อจับคู่
+      await pairNewDevice(deviceName.trim(), cloudflareUrl, code);
       setSuccess(true);
       setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
     } catch (err) {
@@ -82,18 +89,6 @@ export default function PairPage() {
                 />
               </div>
 
-              <div className="pair-form-group">
-                <label className="pair-form-label">IP Address / URL อุปกรณ์</label>
-                <input
-                  type="text"
-                  className="pair-form-input"
-                  placeholder="เช่น 192.168.1.121:8000"
-                  value={deviceIp}
-                  onChange={(e) => setDeviceIp(e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-
               {/* Code Input */}
               <div className="pair-input-section">
                 <label className="pair-form-label" style={{ marginBottom: 12 }}>กรอกรหัสจับคู่ 6 หลัก</label>
@@ -102,7 +97,7 @@ export default function PairPage() {
                 {loading && (
                   <div className="pair-loading">
                     <div className="spinner" style={{ width: 24, height: 24, borderWidth: 2 }} />
-                    <span>กำลังเชื่อมต่อและตรวจสอบ...</span>
+                    <span>กำลังค้นหากล้องและตรวจสอบรหัส...</span>
                   </div>
                 )}
 
@@ -134,15 +129,15 @@ export default function PairPage() {
             <div className="pair-help" style={{ marginTop: 24 }}>
               <div className="pair-help-item">
                 <span className="pair-help-step">1</span>
-                <span>เปิดระบบ Fall Guard บนคอมพิวเตอร์</span>
+                <span>เปิดระบบ Fall Guard บนคอมพิวเตอร์กล้อง</span>
               </div>
               <div className="pair-help-item">
                 <span className="pair-help-step">2</span>
-                <span>ดู IP ของเครื่อง และรหัส 6 หลักบนจอภาพ</span>
+                <span>ดูรหัส 6 หลักบนหน้าจอกล้อง</span>
               </div>
               <div className="pair-help-item">
                 <span className="pair-help-step">3</span>
-                <span>กรอกข้อมูลด้านบนเพื่อเพิ่มอุปกรณ์</span>
+                <span>กรอกรหัส 6 หลักเพื่อจับคู่ทันที</span>
               </div>
             </div>
           </>
