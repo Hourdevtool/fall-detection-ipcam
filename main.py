@@ -33,7 +33,14 @@ if __name__ == "__main__":
     api_thread = threading.Thread(target=run_api_server, daemon=True)
     api_thread.start()
     
+    # รัน Cloudflare Tunnel ใน background thread อีกเส้น (ดึงมาจากไฟล์ cloudflared_auto.py)
+    try:
+        from cloudflared_auto import run_cloudflared
+        cloudflare_thread = threading.Thread(target=run_cloudflared, daemon=True)
+        cloudflare_thread.start()
+    except ImportError:
+        print("⚠️ ไม่สามารถโหลด cloudflared_auto ได้ โปรดตรวจสอบว่ามีไฟล์นี้อยู่")
+    
     # รัน Flet App เป็นแบบ Windows Native App (ไม่ใช่บนเว็บเบราว์เซอร์)
     ft.app(target=main, view=ft.AppView.FLET_APP)
-
 
