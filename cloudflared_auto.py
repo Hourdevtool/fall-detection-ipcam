@@ -35,7 +35,7 @@ def update_firebase(url):
     """ฟังก์ชันสำหรับอัปเดต URL ไปยัง Firebase Realtime Database แบบแยกตามอุปกรณ์"""
     try:
         # 1. อ่านไฟล์ system_config.json เพื่อดึง pair_code และ system_id
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_config.json")
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "system_config.json")
         system_id = "unknown"
         pair_code = "unknown"
         

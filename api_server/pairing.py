@@ -5,7 +5,7 @@ import uuid
 import os
 import json
 
-SYSTEM_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "system_config.json")
+SYSTEM_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "system_config.json")
 
 
 def _load_config() -> dict:

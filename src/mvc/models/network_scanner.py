@@ -13,8 +13,8 @@ class NetworkScanner:
         self.camera_manager = camera_manager
         # on_camera_found signature: on_camera_found(ip, rtsp_url, needs_naming, temp_img_path)
         self.on_camera_found = None
-        self.config_file = "config.json"
-        self.user, self.password = self._load_credentials()
+        self.config_file = "config/config.json"
+        self.user, self.password, self.line_bot_token, self.line_group_id = self._load_credentials()
 
     def _load_credentials(self):
         import json
@@ -25,14 +25,18 @@ class NetworkScanner:
                     config = json.load(f)
                     user = config.get("username", "admin")
                     password = config.get("password", "ctnphrae1234")
-                    return user, password
+                    line_bot_token = config.get("line_bot_token", "")
+                    line_group_id = config.get("line_group_id", "")
+                    return user, password, line_bot_token, line_group_id
             except Exception:
                 pass
-        return "admin", "ctnphrae1234"
+        return "admin", "ctnphrae1234", "", ""
 
-    def save_credentials(self, user, password):
+    def save_credentials(self, user, password, line_bot_token="", line_group_id=""):
         self.user = user
         self.password = password
+        self.line_bot_token = line_bot_token
+        self.line_group_id = line_group_id
         import json
         import os
         config = {}
@@ -44,6 +48,8 @@ class NetworkScanner:
                 pass
         config["username"] = user
         config["password"] = password
+        config["line_bot_token"] = line_bot_token
+        config["line_group_id"] = line_group_id
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=4)
@@ -94,15 +100,29 @@ class NetworkScanner:
                 
                 print(f"📷 [IP: {ip}] พบกล้อง ONVIF (RTSP: {rtsp_url})")
 
+                # Get Serial Number (MAC Address)
+                serial_number = ip
+                try:
+                    devicemgmt = cam.create_devicemgmt_service()
+                    device_info = devicemgmt.GetDeviceInformation()
+                    if device_info and hasattr(device_info, 'SerialNumber') and device_info.SerialNumber:
+                        serial_number = str(device_info.SerialNumber).strip()
+                except Exception as e:
+                    print(f"ℹ️ [IP: {ip}] ดึง SerialNumber ไม่ได้ ใช้ IP แทน: {e}")
+
                 # Check if camera needs naming
                 import json
                 import os
                 needs_naming = True
-                if os.path.exists("cameras.json"):
+                if os.path.exists("config/cameras.json"):
                     try:
-                        with open("cameras.json", "r", encoding="utf-8") as f:
+                        with open("config/cameras.json", "r", encoding="utf-8") as f:
                             config = json.load(f)
-                            if ip in config:
+                            if serial_number in config:
+                                needs_naming = False
+                                # If IP changed, we should probably update it, but for now we just know it's named.
+                            elif ip in config:
+                                # Backward compatibility: if it was saved by IP before
                                 needs_naming = False
                     except Exception:
                         pass
@@ -143,7 +163,7 @@ class NetworkScanner:
                         print(f"ℹ️ [IP: {ip}] เพิ่มกล้องโดยไม่มีภาพตัวอย่าง")
 
                 if self.on_camera_found:
-                    self.on_camera_found(ip, rtsp_url, needs_naming, temp_path)
+                    self.on_camera_found(ip, rtsp_url, needs_naming, temp_path, serial_number)
                 return  # Done with this IP
 
             except Exception as e:

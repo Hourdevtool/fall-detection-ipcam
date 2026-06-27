@@ -93,6 +93,7 @@ class MainView:
 
         # Dictionary to store Image controls per IP
         self.camera_images = {}
+        self.camera_overlays = {}
 
     def show_pairing_code(self, code):
         self.pair_code_text.value = f" {code} "
@@ -104,18 +105,38 @@ class MainView:
         self.page.update()
 
 
-    def update_grid(self, base64_frames):
+    def update_grid(self, base64_frames, active_cameras, camera_names):
         needs_page_update = False
+        all_ips = set(active_cameras.keys()) | set(camera_names.keys())
 
-        for ip, b64 in base64_frames.items():
+        for ip in all_ips:
+            b64 = base64_frames.get(ip)
+            is_active = active_cameras.get(ip, False)
+            cam_name = camera_names.get(ip, ip)
+
             if ip not in self.camera_images:
                 # Create a new Image control
-                img = ft.Image(src=f"data:image/jpeg;base64,{b64}", fit="contain", gapless_playback=True) # type: ignore
+                # If there's no frame yet, use a 1x1 transparent GIF base64
+                transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                img_src = f"data:image/jpeg;base64,{b64}" if b64 else f"data:image/gif;base64,{transparent_pixel}"
+                img = ft.Image(src=img_src, fit="contain", gapless_playback=True) # type: ignore
+                
+                offline_overlay = ft.Container(
+                    content=ft.Column([
+                        ft.ProgressRing(width=30, height=30, stroke_width=3, color="amber"),
+                        ft.Text("กำลังเชื่อมต่อใหม่...", color="amber", size=12, weight=ft.FontWeight.BOLD)
+                    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    bgcolor="#B0000000", # semi-transparent black
+                    alignment=ft.Alignment(0, 0),
+                    visible=not is_active or not b64
+                )
+                
                 card = ft.Container(
                     content=ft.Stack([
                         img,
+                        offline_overlay,
                         ft.Container(
-                            content=ft.Text(f"IP: {ip}", color="white", size=12),
+                            content=ft.Text(f"{cam_name} ({ip})", color="white", size=12, weight=ft.FontWeight.BOLD),
                             bgcolor="#80000000",
                             padding=5,
                             border_radius=5,
@@ -127,6 +148,7 @@ class MainView:
                     padding=5
                 )
                 self.camera_images[ip] = img
+                self.camera_overlays[ip] = offline_overlay
                 self.camera_grid.controls.append(card)
                 needs_page_update = True
                 
@@ -135,8 +157,14 @@ class MainView:
                     self.content_container.content = self.camera_grid
                     self.content_container.alignment = None
             else:
-                # Update existing image
-                self.camera_images[ip].src = f"data:image/jpeg;base64,{b64}"
+                # Update existing image and visibility of overlay
+                if b64:
+                    self.camera_images[ip].src = f"data:image/jpeg;base64,{b64}"
+                
+                show_offline = not is_active or not b64
+                if self.camera_overlays[ip].visible != show_offline:
+                    self.camera_overlays[ip].visible = show_offline
+                    needs_page_update = True
 
         # อัพเดต UI — เมื่อ run บน Flet event loop (page.run_task) จะ push ไป client ทันที
         self.page.update()
@@ -186,7 +214,7 @@ class MainView:
 
         self.page.show_dialog(dialog)
 
-    def show_settings_dialog(self, current_username, current_password, on_save_callback):
+    def show_settings_dialog(self, current_username, current_password, current_line_token, current_line_group, on_save_callback):
         username_field = ft.TextField(
             label="Username",
             hint_text="เช่น admin",
@@ -225,9 +253,37 @@ class MainView:
             expand=True
         )
 
+        line_token_field = ft.TextField(
+            label="LINE Channel Access Token",
+            hint_text="ใส่ Token ของ Messaging API",
+            value=current_line_token,
+            prefix_icon=ft.Icons.CHAT,
+            border_color="white24",
+            focused_border_color="green",
+            text_style=ft.TextStyle(color="white"),
+            label_style=ft.TextStyle(color="white54"),
+            hint_style=ft.TextStyle(color="white30"),
+            expand=True
+        )
+
+        line_group_field = ft.TextField(
+            label="LINE Group ID / User ID",
+            hint_text="เช่น Cxxxxxx หรือ Uxxxxxx",
+            value=current_line_group,
+            prefix_icon=ft.Icons.GROUP,
+            border_color="white24",
+            focused_border_color="green",
+            text_style=ft.TextStyle(color="white"),
+            label_style=ft.TextStyle(color="white54"),
+            hint_style=ft.TextStyle(color="white30"),
+            expand=True
+        )
+
         def save_clicked(e):
             user = username_field.value.strip() if username_field.value else ""
             pwd = password_field.value.strip() if password_field.value else ""
+            l_token = line_token_field.value.strip() if line_token_field.value else ""
+            l_group = line_group_field.value.strip() if line_group_field.value else ""
 
             if not user or not pwd:
                 snack_bar = ft.SnackBar(
@@ -244,7 +300,7 @@ class MainView:
             except Exception:
                 pass
 
-            on_save_callback(user, pwd)
+            on_save_callback(user, pwd, l_token, l_group)
             
             snack_bar = ft.SnackBar(
                 content=ft.Text("💾 บันทึกการตั้งค่าสำเร็จ ตัวสแกนจะใช้บัญชีใหม่นี้ทันที", color="white"),
@@ -276,6 +332,16 @@ class MainView:
                     username_field,
                     ft.Container(height=10),
                     password_field,
+                    ft.Divider(color="white24"),
+                    ft.Text(
+                        "ตั้งค่าการแจ้งเตือน LINE Messaging API",
+                        size=14,
+                        color="white70"
+                    ),
+                    ft.Container(height=10),
+                    line_token_field,
+                    ft.Container(height=10),
+                    line_group_field,
                 ], tight=True, width=420),
                 padding=10
             ),

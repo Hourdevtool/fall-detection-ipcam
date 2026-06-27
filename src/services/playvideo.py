@@ -11,16 +11,17 @@ from detection import FallDetector
 def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
     print(f"🎬 [เริ่มดึงภาพ] IP: {ip} (ด้วย PyAV)")
     
-    # Load camera name from cameras.json or shared dict
-    camera_name = camera_names.get(ip, ip)
-    if camera_name == ip:
+    # Load camera name from config/cameras.json or shared dict
+    if camera_names is None:
+        camera_names = {}
         try:
-            if os.path.exists("cameras.json"):
-                with open("cameras.json", "r", encoding="utf-8") as f:
-                    cameras_config = json.load(f)
-                    camera_name = cameras_config.get(ip, ip)
+            if os.path.exists("config/cameras.json"):
+                with open("config/cameras.json", "r", encoding="utf-8") as f:
+                    camera_names = json.load(f)
         except Exception as e:
             print(f"⚠️ Error reading cameras.json: {e}")
+    
+    camera_name = camera_names.get(ip, ip)
 
     # Fall event logging callback
     def _on_fall(cam_name, frame, timestamp):
@@ -65,6 +66,7 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
 
     # --- Reader thread: อ่านเฟรมจาก RTSP อย่างต่อเนื่อง เก็บแค่เฟรมล่าสุด ---
     latest_frame = [None]
+    last_frame_time = [time.time()]
     running = [True]
 
     def read_frames():
@@ -73,6 +75,7 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
                 if not running[0] or not active_cameras.get(ip, False):
                     break
                 latest_frame[0] = frame.to_ndarray(format="bgr24")
+                last_frame_time[0] = time.time()
         except Exception as e:
             print(f"❌ [Reader] IP: {ip} -> {type(e).__name__}: {e}")
         finally:
@@ -88,8 +91,17 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
 
     try:
         while running[0] and active_cameras.get(ip, False):
+            # ตรวจสอบว่าสตรีมค้างหรือไม่ (ไม่ได้เฟรมใหม่เกิน 8 วินาที)
+            if time.time() - last_frame_time[0] > 8.0:
+                print(f"⚠️ [Processor] IP: {ip} -> ไม่ได้รับเฟรมใหม่เกิน 8 วินาที (สตรีมค้าง) ทำการปิดเพื่อเชื่อมต่อใหม่")
+                running[0] = False
+                break
+
             frame_img = latest_frame[0]
             if frame_img is not None:
+                # รีเซ็ตเฟรมล่าสุดเพื่อไม่ให้ประมวลผลซ้ำจนกว่าจะมีเฟรมใหม่
+                latest_frame[0] = None
+                
                 cam_name = camera_names.get(ip, camera_name)
 
                 # Resize เฟรม

@@ -10,7 +10,7 @@ class CameraManager:
         self.active_cameras = {}
         self.frame_buffer = {}   # เก็บ base64 string โดยตรง (ไม่ใช่ numpy array)
         self.camera_names = {}
-        self.config_file = "cameras.json"
+        self.config_file = "config/cameras.json"
         self._load_names()
 
     def _load_names(self):
@@ -23,11 +23,18 @@ class CameraManager:
             except Exception:
                 pass
 
-    def load_camera_name(self, ip):
+    def load_camera_name(self, serial_number, ip):
+        # ลองหาด้วย serial number ก่อน
+        if serial_number in self.camera_names:
+            # ถ้า IP เปลี่ยนไป ให้อัพเดตในหน่วยความจำ
+            self.camera_names[ip] = self.camera_names[serial_number]
+            return self.camera_names[serial_number]
+        # ถ้าไม่มี ลองหาด้วย IP (เผื่อของเก่า)
         return self.camera_names.get(ip, ip)
 
-    def save_camera_name(self, ip, name):
-        self.camera_names[ip] = name
+    def save_camera_name(self, serial_number, ip, name):
+        self.camera_names[serial_number] = name
+        self.camera_names[ip] = name # เก็บไว้ทั้งคู่ใน runtime ให้เข้าถึงด้วย IP ได้ตอน render ภาพ
         config = {}
         if os.path.exists(self.config_file):
             try:
@@ -36,11 +43,15 @@ class CameraManager:
             except Exception:
                 pass
                 
-        config[ip] = name
+        config[serial_number] = name
+        # ลบ IP เก่าออกจาก config เพื่อให้สะอาด (ถ้ามี)
+        if ip in config and serial_number != ip:
+            del config[ip]
+            
         with open(self.config_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
 
-    def start_stream(self, ip, rtsp_url):
+    def start_stream(self, ip, rtsp_url, serial_number=None):
         if self.active_cameras.get(ip, False):
             return
 

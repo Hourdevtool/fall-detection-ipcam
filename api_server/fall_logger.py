@@ -64,5 +64,38 @@ def log_fall_event(camera_ip: str, camera_name: str, frame, detected_at: float |
             duration_seconds=0.0,
         )
         print(f"🗃️ Fall event logged: #{event['id']} — {camera_name} at {time_str}")
+        
+        # Send LINE Alert
+        send_line_alert(camera_name, time_str)
     except Exception as e:
         print(f"❌ Error logging fall event: {e}")
+
+def send_line_alert(camera_name, time_str):
+    import json
+    import os
+    from linebot import LineBotApi
+    from linebot.models import TextSendMessage
+    from linebot.exceptions import LineBotApiError
+
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.json")
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            bot_token = config.get("line_bot_token", "").strip()
+            group_id = config.get("line_group_id", "").strip()
+    except Exception:
+        return
+
+    if not bot_token or not group_id:
+        return
+
+    line_bot_api = LineBotApi(bot_token)
+    try:
+        line_bot_api.push_message(
+            group_id,
+            TextSendMessage(text=f"🚨 แจ้งเตือนการล้ม!\nกล้อง: {camera_name}\nเวลา: {time_str}")
+        )
+    except LineBotApiError as e:
+        print(f"❌ LineBotApiError: {e}")
+    except Exception as e:
+        print(f"❌ Error sending LINE alert: {e}")

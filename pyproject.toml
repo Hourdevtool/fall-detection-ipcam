@@ -12,6 +12,7 @@ dependencies = [
     "flet>=0.85.1",
     "google-auth>=2.53.0",
     "joblib>=1.5.3",
+    "line-bot-sdk>=3.23.1",
     "onvif-zeep>=0.2.12",
     "opencv-python>=4.13.0.92",
     "pillow>=12.2.0",

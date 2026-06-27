@@ -129,7 +129,7 @@ export default function PairPage() {
             <div className="pair-help" style={{ marginTop: 24 }}>
               <div className="pair-help-item">
                 <span className="pair-help-step">1</span>
-                <span>เปิดระบบ Fall Guard บนคอมพิวเตอร์กล้อง</span>
+                <span>เปิดระบบบนคอมพิวเตอร์กล้อง</span>
               </div>
               <div className="pair-help-item">
                 <span className="pair-help-step">2</span>

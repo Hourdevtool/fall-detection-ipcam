@@ -41,7 +41,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="dashboard-header">
         <div>
-          <h1 className="page-title">🛡️ Fall Guard</h1>
+          <h1 className="page-title">🛡️ เครื่องประมวลผลภาพอัจฉริยะเพื่อตรวจจับและแจ้งเตือนการล้มของผู้สูงอายุภายในบ้านด้วยปัญญาประดิษฐ์ (AI) ผ่านระบบไลน์</h1>
           <p className="page-subtitle">
             {activeDevice ? `อุปกรณ์: ${activeDevice.name}` : 'กำลังค้นหากล้อง...'}
           </p>
@@ -109,12 +109,12 @@ export default function DashboardPage() {
       <h2 className="section-title" style={{ marginTop: 16 }}>📹 กล้องวงจรปิด ({cameras.length})</h2>
 
       {/* Camera Grid */}
-      {loading && cameraEntries.length === 0 ? (
+      {loading && cameras.length === 0 ? (
         <div className="dashboard-loading">
           <div className="skeleton" style={{ height: 200, borderRadius: 16 }} />
           <div className="skeleton" style={{ height: 200, borderRadius: 16, marginTop: 16 }} />
         </div>
-      ) : cameraEntries.length === 0 ? (
+      ) : cameras.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">📡</div>
           <div className="empty-state-title">ไม่พบกล้องของอุปกรณ์นี้</div>
@@ -125,13 +125,13 @@ export default function DashboardPage() {
       ) : (
         <motion.div className="camera-grid" layout>
           <AnimatePresence>
-            {cameraEntries.map(([ip, frame]) => {
-              const camera = cameras.find((c) => c.ip === ip);
+            {cameras.map((camera) => {
+              const frame = frames[camera.ip];
               return (
                 <CameraCard
-                  key={ip}
-                  ip={ip}
-                  name={camera?.name || ip}
+                  key={camera.ip}
+                  ip={camera.ip}
+                  name={camera.name || camera.ip}
                   frame={frame}
                   status={null}
                 />

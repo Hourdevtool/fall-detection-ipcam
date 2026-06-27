@@ -54,17 +54,19 @@ class MainController:
             self.view.show_code_button.visible = False
             self.view.page.update()
 
-    def on_camera_found(self, ip, rtsp_url, needs_naming, temp_path):
+    def on_camera_found(self, ip, rtsp_url, needs_naming, temp_path, serial_number):
         if needs_naming:
-            def save_callback(ip, name):
-                self.camera_manager.save_camera_name(ip, name)
+            def save_callback(ip_addr, name):
+                self.camera_manager.save_camera_name(serial_number, ip_addr, name)
                 # เริ่มสตรีมหลังจากตั้งชื่อเสร็จ
-                self.camera_manager.start_stream(ip, rtsp_url)
+                self.camera_manager.start_stream(ip_addr, rtsp_url, serial_number)
                 
             self.view.show_naming_dialog(ip, temp_path, save_callback)
         else:
+            # Update IP in config if necessary, and load the name
+            name = self.camera_manager.load_camera_name(serial_number, ip)
             # เริ่มสตรีมทันทีถ้าเคยตั้งชื่อแล้ว
-            self.camera_manager.start_stream(ip, rtsp_url)
+            self.camera_manager.start_stream(ip, rtsp_url, serial_number)
 
     def start_frame_updater(self):
         async def updater_loop():
@@ -79,9 +81,10 @@ class MainController:
                     
                     # frame_buffer เก็บ base64 string โดยตรง
                     b64_dict = self.camera_manager.get_frames()
+                    active_cams = dict(self.camera_manager.active_cameras)
+                    cam_names = dict(self.camera_manager.camera_names)
                     
-                    if b64_dict:
-                        self.view.update_grid(b64_dict)
+                    self.view.update_grid(b64_dict, active_cams, cam_names)
 
                     await asyncio.sleep(0.033)  # ~30 FPS UI update
                 except Exception as e:
@@ -95,11 +98,13 @@ class MainController:
         self.page.run_task(updater_loop)
 
     def on_settings_click(self, e):
-        def save_callback(username, password):
-            self.network_scanner.save_credentials(username, password)
+        def save_callback(username, password, line_bot_token, line_group_id):
+            self.network_scanner.save_credentials(username, password, line_bot_token, line_group_id)
 
         self.view.show_settings_dialog(
             self.network_scanner.user,
             self.network_scanner.password,
+            self.network_scanner.line_bot_token,
+            self.network_scanner.line_group_id,
             save_callback
         )

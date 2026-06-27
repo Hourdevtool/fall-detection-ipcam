@@ -45,3 +45,6 @@ cameras.json
 *.sln
 *.sw?
 Thumbs.db
+
+# Config files
+config/

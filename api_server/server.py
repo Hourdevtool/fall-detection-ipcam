@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 
+
+
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -252,19 +254,21 @@ async def pair_unpair(current_user: dict = Depends(require_auth)):
 
 @app.get("/api/cameras")
 async def list_cameras(current_user: dict = Depends(require_auth)):
-    """List all active cameras."""
+    """List all active and registered cameras."""
     manager = get_camera_manager()
     if not manager:
         return []
 
     cameras = []
-    for ip, is_active in manager.active_cameras.items():
-        if is_active:
-            cameras.append(CameraInfo(
-                ip=ip,
-                name=manager.camera_names.get(ip, ip),
-                has_frame=ip in manager.frame_buffer,
-            ))
+    # ยูเนียนกล้องทั้งหมดจากประวัติการทำงานและที่บันทึกใน config/cameras.json
+    all_ips = set(manager.active_cameras.keys()) | set(manager.camera_names.keys())
+    for ip in all_ips:
+        is_active = manager.active_cameras.get(ip, False)
+        cameras.append(CameraInfo(
+            ip=ip,
+            name=manager.camera_names.get(ip, ip),
+            has_frame=is_active and (ip in manager.frame_buffer),
+        ))
     return cameras
 
 

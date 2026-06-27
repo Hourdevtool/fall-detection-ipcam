@@ -122,8 +122,9 @@ export default function LoginPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.4 }}
+          style={{ fontSize: '1.2rem', whiteSpace: 'normal', wordBreak: 'break-word', padding: '0 10px' }}
         >
-          FALL GUARD
+          เครื่องประมวลผลภาพอัจฉริยะเพื่อตรวจจับและแจ้งเตือนการล้มของผู้สูงอายุภายในบ้านด้วยปัญญาประดิษฐ์ (AI) ผ่านระบบไลน์
         </motion.h1>
 
         <motion.p
@@ -246,7 +247,7 @@ export default function LoginPage() {
           animate={{ opacity: 1 }}
           transition={{ delay: 1 }}
         >
-          v1.0 • Fall Guard
+          v1.0
         </motion.p>
       </motion.div>
     </div>

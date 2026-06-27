@@ -36,7 +36,7 @@ export default function CameraCard({ ip, name, frame, status, onClick }) {
         ) : (
           <div className="camera-card-placeholder">
             <div className="spinner" />
-            <span>กำลังโหลด...</span>
+            <span>กำลังเชื่อมต่อใหม่...</span>
           </div>
         )}
       </div>
