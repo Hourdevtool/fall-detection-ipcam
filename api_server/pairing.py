@@ -23,6 +23,10 @@ def _load_config() -> dict:
 def _save_config(config: dict):
     """Save configuration to system_config.json."""
     config_path = os.path.abspath(SYSTEM_CONFIG_PATH)
+    config_dir = os.path.dirname(config_path)
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir, exist_ok=True)
+        
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
 

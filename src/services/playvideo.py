@@ -8,6 +8,25 @@ import threading
 import time
 from detection import FallDetector
 
+# 🚀 OPTIMIZATION: Singleton FallDetector — โหลด YOLO/RF ครั้งเดียว แชร์ทุกกล้อง
+_shared_detector = None
+_detector_lock = threading.Lock()
+
+def _get_shared_detector(on_fall_callback=None):
+    """Get or create the shared FallDetector instance (thread-safe singleton)."""
+    global _shared_detector
+    if _shared_detector is None:
+        with _detector_lock:
+            if _shared_detector is None:
+                print("🧠 Loading shared AI models (YOLO + Random Forest)...")
+                _shared_detector = FallDetector(on_fall_callback=on_fall_callback)
+                print("✅ Shared AI models loaded successfully!")
+    # Update callback if provided (each camera may have its own logging callback)
+    if on_fall_callback is not None:
+        _shared_detector.on_fall_callback = on_fall_callback
+    return _shared_detector
+
+
 def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
     print(f"🎬 [เริ่มดึงภาพ] IP: {ip} (ด้วย PyAV)")
     
@@ -31,7 +50,8 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
         except Exception as e:
             print(f"⚠️ Fall logging error: {e}")
 
-    detector = FallDetector(on_fall_callback=_on_fall)
+    # 🚀 OPTIMIZATION: ใช้ FallDetector ตัวเดียวกันทุกกล้อง (ลด RAM ~500MB ต่อกล้อง)
+    detector = _get_shared_detector(on_fall_callback=_on_fall)
 
     container = None
     av_options_list = [
@@ -86,8 +106,8 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
 
     # --- Processing loop: ประมวลผล AI ทุก N เฟรม, encode JPEG+base64 ในนี้เลย ---
     frame_count = 0
-    ai_interval = 3  # ประมวลผล AI ทุก 3 เฟรม (ลดภาระ CPU/GPU)
-    jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 70]  # ลด quality เล็กน้อยเพื่อความเร็ว
+    ai_interval = 5  # 🚀 OPTIMIZATION: ประมวลผล AI ทุก 5 เฟรม (เดิม 3)
+    jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 60]  # 🚀 OPTIMIZATION: ลด quality จาก 70 เป็น 60
 
     try:
         while running[0] and active_cameras.get(ip, False):
@@ -104,8 +124,8 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
                 
                 cam_name = camera_names.get(ip, camera_name)
 
-                # Resize เฟรม
-                img_resized = cv2.resize(frame_img, (640, 360))
+                # 🚀 OPTIMIZATION: Resize ให้เล็กลงก่อน (ตัว YOLO จะ resize เพิ่มเองอีกที)
+                img_resized = cv2.resize(frame_img, (640, 360), interpolation=cv2.INTER_LINEAR)
 
                 frame_count += 1
                 if frame_count % ai_interval == 0:
@@ -120,7 +140,8 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
                 b64_str = base64.b64encode(buffer).decode('utf-8')
                 frame_buffer[ip] = b64_str
 
-            time.sleep(0.016)  # ~60 FPS cap
+            # 🚀 OPTIMIZATION: จำกัดที่ ~30 FPS (เดิม ~60 FPS)
+            time.sleep(0.033)
     except Exception as e:
         print(f"❌ [Processor] IP: {ip} -> {type(e).__name__}: {e}")
     finally:

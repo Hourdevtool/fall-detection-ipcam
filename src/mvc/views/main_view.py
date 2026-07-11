@@ -21,6 +21,9 @@ class MainView:
             on_click=None
         )
         
+        self.intruder_toggle = ft.Switch(label="Intruder Detection", value=False, label_position=ft.LabelPosition.LEFT)
+        self.register_button = ft.ElevatedButton("Register Family", icon=ft.Icons.PERSON_ADD, on_click=None)
+        
         self.settings_button = ft.IconButton(
             icon=ft.Icons.SETTINGS,
             icon_color="white",
@@ -29,7 +32,7 @@ class MainView:
             on_click=None
         )
         self.header_row = ft.Row(
-            controls=[self.header_title, ft.Row([self.show_code_button, self.settings_button])],
+            controls=[self.header_title, ft.Row([self.intruder_toggle, self.register_button, self.show_code_button, self.settings_button])],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN
         )
         
@@ -354,3 +357,43 @@ class MainView:
         )
 
         self.page.show_dialog(dialog)
+
+    def show_registration_dialog(self, start_webcam_callback, capture_callback, close_callback):
+        self.reg_image = ft.Image(src="", width=640, height=480, fit="contain") # type: ignore
+        self.reg_name_input = ft.TextField(label="ชื่อสมาชิกครอบครัว", hint_text="ระบุชื่อ (ภาษาอังกฤษ/ไทย)")
+        self.reg_status_text = ft.Text("")
+        
+        def on_capture(angle):
+            name = self.reg_name_input.value.strip() if self.reg_name_input.value else ""
+            if not name:
+                self.reg_status_text.value = "กรุณาระบุชื่อก่อนบันทึกภาพ"
+                self.reg_status_text.color = "red"
+                self.page.update()
+                return
+            capture_callback(name, angle, self.reg_status_text)
+            
+        def on_close(e):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+            close_callback()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("ลงทะเบียนสมาชิกครอบครัว"),
+            content=ft.Column([
+                self.reg_name_input,
+                self.reg_image,
+                self.reg_status_text,
+                ft.Row([
+                    ft.ElevatedButton("ถ่ายภาพใบหน้า (Capture)", on_click=lambda e: on_capture("front"))
+                ], alignment=ft.MainAxisAlignment.CENTER)
+            ], tight=True, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            actions=[
+                ft.TextButton("ปิด", on_click=on_close)
+            ],
+            on_dismiss=on_close,
+            modal=True
+        )
+        self.page.show_dialog(dialog)
+        start_webcam_callback(self.reg_image)

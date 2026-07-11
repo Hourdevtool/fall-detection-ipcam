@@ -18,6 +18,15 @@ class MainController:
         self.view.settings_button.on_click = self.on_settings_click
         self.view.show_code_button.on_click = self.on_show_code_click
         
+        self.view.register_button.on_click = self.on_register_click
+        self.view.intruder_toggle.on_change = self.on_intruder_toggle
+        
+        self.webcam_running = False
+        self.webcam_cap = None
+        
+        import os
+        os.environ["INTRUDER_DETECTION"] = "0"
+        
     def start(self):
         from api_server.pairing import get_or_create_system_id
         self.system_id = get_or_create_system_id()
@@ -74,8 +83,8 @@ class MainController:
             loop_count = 0
             while True:
                 try:
-                    # ตรวจสอบสถานะการเชื่อมต่อทุกๆ ~3 วินาที (90 รอบ x 33ms)
-                    if loop_count % 90 == 0:
+                    # 🚀 OPTIMIZATION: ตรวจสอบสถานะการเชื่อมต่อทุกๆ ~10 วินาที (100 รอบ x 100ms)
+                    if loop_count % 100 == 0:
                         self.check_pairing_status()
                     loop_count += 1
                     
@@ -86,7 +95,8 @@ class MainController:
                     
                     self.view.update_grid(b64_dict, active_cams, cam_names)
 
-                    await asyncio.sleep(0.033)  # ~30 FPS UI update
+                    # 🚀 OPTIMIZATION: ลดเป็น 10 FPS (เดิม 30 FPS) — กล้องวงจรปิดไม่ต้อง 30 FPS
+                    await asyncio.sleep(0.1)
                 except Exception as e:
                     err_str = str(e).lower()
                     if "destroyed" in err_str or "session" in err_str:
@@ -108,3 +118,86 @@ class MainController:
             self.network_scanner.line_group_id,
             save_callback
         )
+
+    def on_intruder_toggle(self, e):
+        import os
+        is_on = self.view.intruder_toggle.value
+        os.environ["INTRUDER_DETECTION"] = "1" if is_on else "0"
+        print(f"Intruder Detection is now {'ON' if is_on else 'OFF'}")
+
+    def on_register_click(self, e):
+        self.view.show_registration_dialog(
+            self.start_webcam,
+            self.capture_face,
+            self.stop_webcam
+        )
+
+    def start_webcam(self, image_control):
+        import cv2
+        import base64
+        self.webcam_running = True
+        self.webcam_cap = cv2.VideoCapture(0)
+        
+        async def update_webcam():
+            while self.webcam_running and self.webcam_cap and self.webcam_cap.isOpened():
+                ret, frame = self.webcam_cap.read()
+                if ret:
+                    # Save frame for capture
+                    self.current_webcam_frame = frame
+                    _, buffer = cv2.imencode('.jpg', frame)
+                    b64_str = base64.b64encode(buffer).decode('utf-8')
+                    image_control.src = f"data:image/jpeg;base64,{b64_str}"
+                    image_control.update()
+                await asyncio.sleep(0.033)
+                
+        self.page.run_task(update_webcam)
+
+    def capture_face(self, name, angle, status_text_control):
+        if not hasattr(self, 'current_webcam_frame') or self.current_webcam_frame is None:
+            status_text_control.value = "ไม่พบภาพจากกล้อง"
+            status_text_control.color = "red"
+            status_text_control.update()
+            return
+            
+        import cv2
+        import os
+        import threading
+        from src.services.face_recognition_service import FaceRecognitionService
+        
+        status_text_control.value = f"กำลังประมวลผลและดึงลักษณะใบหน้า {angle} (อาจใช้เวลาสักครู่)..."
+        status_text_control.color = "amber"
+        status_text_control.update()
+        
+        # Save temp image
+        temp_img_path = f"temp_capture_{angle}.jpg"
+        cv2.imwrite(temp_img_path, self.current_webcam_frame)
+        
+        def process():
+            try:
+                service = FaceRecognitionService()
+                success, msg = service.register_face(temp_img_path, name, angle)
+                if success:
+                    status_text_control.value = f"บันทึกภาพ {angle} ของ {name} สำเร็จ!"
+                    status_text_control.color = "green"
+                else:
+                    status_text_control.value = f"เกิดข้อผิดพลาด: {msg}"
+                    status_text_control.color = "red"
+            except Exception as e:
+                status_text_control.value = f"Error: {e}"
+                status_text_control.color = "red"
+                
+            if os.path.exists(temp_img_path):
+                try:
+                    os.remove(temp_img_path)
+                except:
+                    pass
+                
+            status_text_control.update()
+            
+        threading.Thread(target=process, daemon=True).start()
+
+    def stop_webcam(self):
+        self.webcam_running = False
+        if self.webcam_cap:
+            self.webcam_cap.release()
+            self.webcam_cap = None

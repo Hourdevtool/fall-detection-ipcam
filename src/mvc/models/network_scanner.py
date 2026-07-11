@@ -175,12 +175,13 @@ class NetworkScanner:
         subnet = self.get_local_subnet()
         print(f"📡 เริ่มเดินเครื่องสแกนวง LAN: {subnet}.1 ถึง {subnet}.254")
         while True:
-            with ThreadPoolExecutor(max_workers=50) as executor:
+            # 🚀 OPTIMIZATION: ลด thread จาก 50 เป็น 20, เพิ่มรอบสแกนเป็น 30 วินาที
+            with ThreadPoolExecutor(max_workers=20) as executor:
                 for i in range(1, 255):
                     ip = f"{subnet}.{i}"
                     executor.submit(self.get_onvif, ip)
             import time
-            time.sleep(15)
+            time.sleep(30)
 
     def start_scanning(self):
         threading.Thread(target=self.scan_loop, daemon=True).start()
