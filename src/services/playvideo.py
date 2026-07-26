@@ -12,18 +12,20 @@ from detection import FallDetector
 _shared_detector = None
 _detector_lock = threading.Lock()
 
-def _get_shared_detector(on_fall_callback=None):
+def _get_shared_detector(on_fall_callback=None, on_intruder_callback=None):
     """Get or create the shared FallDetector instance (thread-safe singleton)."""
     global _shared_detector
     if _shared_detector is None:
         with _detector_lock:
             if _shared_detector is None:
                 print("🧠 Loading shared AI models (YOLO + Random Forest)...")
-                _shared_detector = FallDetector(on_fall_callback=on_fall_callback)
+                _shared_detector = FallDetector(on_fall_callback=on_fall_callback, on_intruder_callback=on_intruder_callback)
                 print("✅ Shared AI models loaded successfully!")
     # Update callback if provided (each camera may have its own logging callback)
     if on_fall_callback is not None:
         _shared_detector.on_fall_callback = on_fall_callback
+    if on_intruder_callback is not None:
+        _shared_detector.on_intruder_callback = on_intruder_callback
     return _shared_detector
 
 
@@ -50,8 +52,16 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
         except Exception as e:
             print(f"⚠️ Fall logging error: {e}")
 
+    # Intruder event logging callback
+    def _on_intruder(cam_name, frame, timestamp):
+        try:
+            from api_server.fall_logger import log_intruder_event
+            log_intruder_event(ip, cam_name, frame, timestamp)
+        except Exception as e:
+            print(f"⚠️ Intruder logging error: {e}")
+
     # 🚀 OPTIMIZATION: ใช้ FallDetector ตัวเดียวกันทุกกล้อง (ลด RAM ~500MB ต่อกล้อง)
-    detector = _get_shared_detector(on_fall_callback=_on_fall)
+    detector = _get_shared_detector(on_fall_callback=_on_fall, on_intruder_callback=_on_intruder)
 
     container = None
     av_options_list = [

@@ -102,6 +102,14 @@ def run_cloudflared():
                         current_url = found_url
                         print(f"\n🌐 [CLOUDFLARE] ได้รับ URL ใหม่: {current_url}")
                         
+                        # บันทึก URL ลงไฟล์สำหรับให้ service อื่นในเครื่องเอาไปใช้ (เช่น ส่ง LINE)
+                        try:
+                            cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "cloudflare_url.txt")
+                            with open(cf_file, "w", encoding="utf-8") as f:
+                                f.write(current_url)
+                        except Exception as e:
+                            print(f"⚠️ ไม่สามารถบันทึกไฟล์ cloudflare_url.txt ได้: {e}")
+                        
                         # อัปเดตขึ้น Firebase (ทำใน Background Thread จะได้ไม่บล็อกการอ่าน Log)
                         threading.Thread(target=update_firebase, args=(current_url,)).start()
 

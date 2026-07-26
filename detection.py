@@ -13,7 +13,7 @@ import tempfile
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 class FallDetector:
-    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.7, fall_trigger_frames=10, on_fall_callback=None):
+    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.7, fall_trigger_frames=10, on_fall_callback=None, on_intruder_callback=None):
         # ใช้ absolute path เพื่อให้ subprocess หาไฟล์เจอเสมอ
         if yolo_path is None:
             yolo_path = os.path.join(_PROJECT_ROOT,"Tools", "yolov8n-pose.pt")
@@ -40,6 +40,7 @@ class FallDetector:
         self.status = 'normal'
         self.color = (0, 255, 0)
         self.on_fall_callback = on_fall_callback
+        self.on_intruder_callback = on_intruder_callback
         self._fall_callback_fired = False  # ป้องกันเรียก callback ซ้ำ
         
         # Audio playback initialization
@@ -252,6 +253,11 @@ class FallDetector:
                              self.last_intruder_color = (0, 0, 255)
                              intruder_color = (0, 0, 255)
                              self.async_play_intruder_alert(camera_name)
+                             if self.on_intruder_callback:
+                                 try:
+                                     self.on_intruder_callback(camera_name, original_frame, time.time())
+                                 except Exception as e:
+                                     print(f"❌ Intruder callback error: {e}")
                          elif msg.startswith("Known"):
                              self.last_intruder_color = (0, 255, 0)
                              intruder_color = (0, 255, 0)

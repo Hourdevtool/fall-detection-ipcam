@@ -66,15 +66,15 @@ def log_fall_event(camera_ip: str, camera_name: str, frame, detected_at: float |
         print(f"🗃️ Fall event logged: #{event['id']} — {camera_name} at {time_str}")
         
         # Send LINE Alert
-        send_line_alert(camera_name, time_str)
+        send_line_alert(camera_name, time_str, filename)
     except Exception as e:
         print(f"❌ Error logging fall event: {e}")
 
-def send_line_alert(camera_name, time_str):
+def send_line_alert(camera_name, time_str, filename=""):
     import json
     import os
     from linebot import LineBotApi
-    from linebot.models import TextSendMessage
+    from linebot.models import TextSendMessage, ImageSendMessage
     from linebot.exceptions import LineBotApiError
 
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.json")
@@ -91,11 +91,89 @@ def send_line_alert(camera_name, time_str):
 
     line_bot_api = LineBotApi(bot_token)
     try:
-        line_bot_api.push_message(
-            group_id,
-            TextSendMessage(text=f"🚨 แจ้งเตือนการล้ม!\nกล้อง: {camera_name}\nเวลา: {time_str}")
-        )
+        messages = [TextSendMessage(text=f"🚨 แจ้งเตือนการล้ม!\nกล้อง: {camera_name}\nเวลา: {time_str}")]
+        
+        # ถ้าระบบมีภาพ และหา Cloudflare URL เจอ ให้แนบภาพไปด้วย
+        if filename:
+            cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "cloudflare_url.txt")
+            if os.path.exists(cf_file):
+                with open(cf_file, "r", encoding="utf-8") as f:
+                    cf_url = f.read().strip()
+                if cf_url.startswith("https"):
+                    # URL สำหรับรูปภาพ (ต้องเป็น HTTPS ตามที่ LINE บังคับ)
+                    image_url = f"{cf_url}/api/snapshots/{filename}"
+                    messages.append(ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
+
+        line_bot_api.push_message(group_id, messages)
     except LineBotApiError as e:
         print(f"❌ LineBotApiError: {e}")
     except Exception as e:
         print(f"❌ Error sending LINE alert: {e}")
+
+# Cooldown to prevent duplicate intruder events
+_last_intruder_log_time: dict[str, float] = {}
+_intruder_log_lock = threading.Lock()
+INTRUDER_COOLDOWN_SECONDS = 30
+
+def log_intruder_event(camera_ip: str, camera_name: str, frame, detected_at: float | None = None):
+    now = time.time()
+    if detected_at is None:
+        detected_at = now
+
+    with _intruder_log_lock:
+        last_time = _last_intruder_log_time.get(camera_ip, 0)
+        if now - last_time < INTRUDER_COOLDOWN_SECONDS:
+            return
+        _last_intruder_log_time[camera_ip] = now
+
+    ensure_snapshots_dir()
+
+    time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(detected_at))
+    safe_ip = camera_ip.replace(".", "_")
+    filename = f"intruder_{time_str}_{safe_ip}.jpg"
+    filepath = os.path.join(os.path.abspath(SNAPSHOTS_DIR), filename)
+
+    try:
+        if frame is not None:
+            cv2.imwrite(filepath, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        else:
+            filename = ""
+    except Exception as e:
+        filename = ""
+
+    # Send LINE Alert for Intruder
+    send_intruder_line_alert(camera_name, time_str, filename)
+
+def send_intruder_line_alert(camera_name, time_str, filename=""):
+    import json
+    import os
+    from linebot import LineBotApi
+    from linebot.models import TextSendMessage, ImageSendMessage
+    
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.json")
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            bot_token = config.get("line_bot_token", "").strip()
+            group_id = config.get("line_group_id", "").strip()
+    except Exception:
+        return
+
+    if not bot_token or not group_id:
+        return
+
+    line_bot_api = LineBotApi(bot_token)
+    try:
+        messages = [TextSendMessage(text=f"🚨 แจ้งเตือนพบผู้บุกรุก!\nกล้อง: {camera_name}\nเวลา: {time_str}")]
+        if filename:
+            cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "cloudflare_url.txt")
+            if os.path.exists(cf_file):
+                with open(cf_file, "r", encoding="utf-8") as f:
+                    cf_url = f.read().strip()
+                if cf_url.startswith("https"):
+                    image_url = f"{cf_url}/api/snapshots/{filename}"
+                    messages.append(ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
+
+        line_bot_api.push_message(group_id, messages)
+    except Exception as e:
+        print(f"❌ Error sending intruder LINE alert: {e}")

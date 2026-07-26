@@ -12,7 +12,22 @@ def main():
     
     # โหลด AI (จะโหลดทั้ง YOLO และ Face Recognition)
     print("⚙️ กำลังโหลดโมเดล AI (การล้ม + ตรวจจับใบหน้า)... อาจใช้เวลาสักครู่")
-    detector = FallDetector(conf_threshold=0.4)
+    
+    def _on_fall(cam_name, frame, timestamp):
+        try:
+            from api_server.fall_logger import log_fall_event
+            log_fall_event("127.0.0.1", cam_name, frame, timestamp)
+        except Exception as e:
+            print(f"⚠️ Fall logging error: {e}")
+
+    def _on_intruder(cam_name, frame, timestamp):
+        try:
+            from api_server.fall_logger import log_intruder_event
+            log_intruder_event("127.0.0.1", cam_name, frame, timestamp)
+        except Exception as e:
+            print(f"⚠️ Intruder logging error: {e}")
+
+    detector = FallDetector(conf_threshold=0.4, on_fall_callback=_on_fall, on_intruder_callback=_on_intruder)
     
     print("🎬 กำลังเปิดกล้อง Webcam...")
     cap = cv2.VideoCapture(0)
