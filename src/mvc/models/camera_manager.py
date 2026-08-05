@@ -10,8 +10,35 @@ class CameraManager:
         self.active_cameras = {}
         self.frame_buffer = {}   # เก็บ base64 string โดยตรง (ไม่ใช่ numpy array)
         self.camera_names = {}
+        self.pending_naming = set()
+        self._lock = threading.Lock()
         self.config_file = "config/cameras.json"
         self._load_names()
+
+    def is_pending_or_active(self, ip, serial_number=None):
+        with self._lock:
+            if self.active_cameras.get(ip, False):
+                return True
+            if ip in self.pending_naming:
+                return True
+            if serial_number and serial_number in self.pending_naming:
+                return True
+            return False
+
+    def mark_pending(self, ip, serial_number=None):
+        with self._lock:
+            if self.active_cameras.get(ip, False) or ip in self.pending_naming or (serial_number and serial_number in self.pending_naming):
+                return False
+            self.pending_naming.add(ip)
+            if serial_number:
+                self.pending_naming.add(serial_number)
+            return True
+
+    def clear_pending(self, ip, serial_number=None):
+        with self._lock:
+            self.pending_naming.discard(ip)
+            if serial_number:
+                self.pending_naming.discard(serial_number)
 
     def _load_names(self):
         if os.path.exists(self.config_file):

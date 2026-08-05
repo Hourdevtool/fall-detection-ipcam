@@ -1,6 +1,12 @@
 import flet as ft
 import os
 
+def is_valid_ip(ip_str):
+    if not isinstance(ip_str, str):
+        return False
+    parts = ip_str.split('.')
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+
 class MainView:
     def __init__(self, page: ft.Page):
         self.page = page
@@ -110,7 +116,23 @@ class MainView:
 
     def update_grid(self, base64_frames, active_cameras, camera_names):
         needs_page_update = False
-        all_ips = set(active_cameras.keys()) | set(camera_names.keys())
+
+        # Clean up any non-IP keys (such as MAC addresses) that might be in self.camera_images
+        invalid_keys = [k for k in list(self.camera_images.keys()) if not is_valid_ip(k)]
+        if invalid_keys:
+            for k in invalid_keys:
+                del self.camera_images[k]
+                if k in self.camera_overlays:
+                    del self.camera_overlays[k]
+            self.camera_grid.controls.clear()
+            self.camera_images.clear()
+            self.camera_overlays.clear()
+            needs_page_update = True
+
+        # Only iterate over actual IP addresses
+        valid_active = {ip for ip in active_cameras.keys() if is_valid_ip(ip)}
+        valid_names = {ip for ip in camera_names.keys() if is_valid_ip(ip)}
+        all_ips = valid_active | valid_names
 
         for ip in all_ips:
             b64 = base64_frames.get(ip)
@@ -169,10 +191,10 @@ class MainView:
                     self.camera_overlays[ip].visible = show_offline
                     needs_page_update = True
 
-        # อัพเดต UI — เมื่อ run บน Flet event loop (page.run_task) จะ push ไป client ทันที
-        self.page.update()
+        if needs_page_update:
+            self.page.update()
 
-    def show_naming_dialog(self, ip, temp_image_path, on_save_callback):
+    def show_naming_dialog(self, ip, temp_image_path, on_save_callback, on_cancel_callback=None):
         # We need a text field for the name
         name_input = ft.TextField(
             label=f"ตั้งชื่อกล้อง IP: {ip}",
@@ -193,6 +215,19 @@ class MainView:
                     pass
             on_save_callback(ip, cam_name)
 
+        def cancel_clicked(e):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                pass
+            if temp_image_path and os.path.exists(temp_image_path):
+                try:
+                    os.remove(temp_image_path)
+                except:
+                    pass
+            if on_cancel_callback:
+                on_cancel_callback(ip)
+
         preview_img = ft.Image(
             src=temp_image_path,
             width=400,
@@ -209,7 +244,8 @@ class MainView:
                 name_input
             ], tight=True, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             actions=[
-                ft.TextButton("บันทึกชื่อกล้อง", on_click=save_clicked)
+                ft.TextButton("ข้าม / ตั้งทีหลัง", on_click=cancel_clicked),
+                ft.ElevatedButton("บันทึกชื่อกล้อง", on_click=save_clicked)
             ],
             actions_alignment=ft.MainAxisAlignment.END,
             modal=True
@@ -359,7 +395,14 @@ class MainView:
         self.page.show_dialog(dialog)
 
     def show_registration_dialog(self, start_webcam_callback, capture_callback, close_callback):
-        self.reg_image = ft.Image(src="", width=640, height=480, fit="contain") # type: ignore
+        transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        self.reg_image = ft.Image(
+            src=f"data:image/gif;base64,{transparent_pixel}",
+            width=640,
+            height=480,
+            fit="contain",
+            gapless_playback=True
+        ) # type: ignore
         self.reg_name_input = ft.TextField(label="ชื่อสมาชิกครอบครัว", hint_text="ระบุชื่อ (ภาษาอังกฤษ/ไทย)")
         self.reg_status_text = ft.Text("")
         

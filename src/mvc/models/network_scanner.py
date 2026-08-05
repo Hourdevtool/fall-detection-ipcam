@@ -8,6 +8,43 @@ COMMON_PORTS = [
     9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
 ]
 
+def get_mac_address(ip):
+    """ดึง MAC Address ของอุปกรณ์ในวง LAN ผ่าน Windows SendARP API หรือ arp -a"""
+    try:
+        import ctypes
+        import socket
+        import struct
+        ip_bytes = socket.inet_aton(ip)
+        dest_ip = struct.unpack('I', ip_bytes)[0]
+        mac_addr = (ctypes.c_byte * 6)()
+        mac_len = ctypes.c_ulong(6)
+        res = ctypes.windll.iphlpapi.SendARP(dest_ip, 0, ctypes.byref(mac_addr), ctypes.byref(mac_len))
+        if res == 0:
+            return '-'.join(f'{b & 0xff:02X}' for b in mac_addr)
+    except Exception:
+        pass
+        
+    try:
+        import subprocess
+        import re
+        output = subprocess.check_output(f"arp -a {ip}", shell=True, text=True)
+        match = re.search(r'([0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2})', output)
+        if match:
+            return match.group(1).upper().replace(':', '-')
+    except Exception:
+        pass
+
+    return None
+
+def is_valid_serial(sn):
+    if not sn:
+        return False
+    sn_str = str(sn).strip().lower()
+    bogus_values = {"0000000", "00000000", "000000000000", "00:00:00:00:00:00", "1234567890", "unknown", "none", "null"}
+    if sn_str in bogus_values or set(sn_str).issubset({'0', ':', '-'}):
+        return False
+    return True
+
 class NetworkScanner:
     def __init__(self, camera_manager):
         self.camera_manager = camera_manager
@@ -71,8 +108,8 @@ class NetworkScanner:
         return result == 0
 
     def get_onvif(self, ip):
-        # Skip if already active
-        if self.camera_manager.active_cameras.get(ip, False):
+        # Skip if already active or pending naming dialog
+        if self.camera_manager.is_pending_or_active(ip):
             return
 
         print(f"🔍 [IP: {ip}] เริ่มสแกน...")
@@ -100,15 +137,26 @@ class NetworkScanner:
                 
                 print(f"📷 [IP: {ip}] พบกล้อง ONVIF (RTSP: {rtsp_url})")
 
-                # Get Serial Number (MAC Address)
-                serial_number = ip
+                # Get Serial Number or hardware MAC Address
+                serial_number = None
                 try:
                     devicemgmt = cam.create_devicemgmt_service()
                     device_info = devicemgmt.GetDeviceInformation()
                     if device_info and hasattr(device_info, 'SerialNumber') and device_info.SerialNumber:
-                        serial_number = str(device_info.SerialNumber).strip()
+                        sn_candidate = str(device_info.SerialNumber).strip()
+                        if is_valid_serial(sn_candidate):
+                            serial_number = sn_candidate
                 except Exception as e:
-                    print(f"ℹ️ [IP: {ip}] ดึง SerialNumber ไม่ได้ ใช้ IP แทน: {e}")
+                    print(f"ℹ️ [IP: {ip}] ดึง SerialNumber จาก ONVIF ไม่ได้: {e}")
+
+                if not serial_number:
+                    mac = get_mac_address(ip)
+                    if mac:
+                        serial_number = mac
+                        print(f"📌 [IP: {ip}] ดึง MAC Address สำเร็จ: {mac}")
+                    else:
+                        serial_number = ip
+                        print(f"ℹ️ [IP: {ip}] ไม่สามารถดึง MAC Address ได้ ใช้ IP แทน")
 
                 # Check if camera needs naming
                 import json

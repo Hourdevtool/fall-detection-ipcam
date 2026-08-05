@@ -65,12 +65,20 @@ class MainController:
 
     def on_camera_found(self, ip, rtsp_url, needs_naming, temp_path, serial_number):
         if needs_naming:
+            if not self.camera_manager.mark_pending(ip, serial_number):
+                print(f"ℹ️ [IP: {ip}] มี Dialog ตั้งชื่อกล้องตัวนี้เปิดอยู่อยู่แล้ว ข้ามการเปิดซ้ำ")
+                return
+
             def save_callback(ip_addr, name):
                 self.camera_manager.save_camera_name(serial_number, ip_addr, name)
                 # เริ่มสตรีมหลังจากตั้งชื่อเสร็จ
                 self.camera_manager.start_stream(ip_addr, rtsp_url, serial_number)
+                self.camera_manager.clear_pending(ip_addr, serial_number)
+
+            def cancel_callback(ip_addr):
+                self.camera_manager.clear_pending(ip_addr, serial_number)
                 
-            self.view.show_naming_dialog(ip, temp_path, save_callback)
+            self.view.show_naming_dialog(ip, temp_path, save_callback, cancel_callback)
         else:
             # Update IP in config if necessary, and load the name
             name = self.camera_manager.load_camera_name(serial_number, ip)
@@ -140,11 +148,13 @@ class MainController:
         
         async def update_webcam():
             while self.webcam_running and self.webcam_cap and self.webcam_cap.isOpened():
-                ret, frame = self.webcam_cap.read()
-                if ret:
+                ret, frame = await asyncio.to_thread(self.webcam_cap.read)
+                if ret and self.webcam_running:
                     # Save frame for capture
                     self.current_webcam_frame = frame
-                    _, buffer = cv2.imencode('.jpg', frame)
+                    _, buffer = await asyncio.to_thread(
+                        cv2.imencode, '.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                    )
                     b64_str = base64.b64encode(buffer).decode('utf-8')
                     image_control.src = f"data:image/jpeg;base64,{b64_str}"
                     image_control.update()
