@@ -30,19 +30,6 @@ export default function LoginPage() {
     }
   }
 
-  // Dev mode: skip Google auth
-  async function handleDevLogin() {
-    setLoading(true);
-    try {
-      await login('dev-mode');
-      navigate('/dashboard', { replace: true });
-    } catch (err) {
-      setError('เกิดข้อผิดพลาด');
-    } finally {
-      setLoading(false);
-    }
-  }
-
 
 
   // Safe redirection via useEffect to avoid rendering side-effects
@@ -123,16 +110,6 @@ export default function LoginPage() {
               ⚠️ ยังไม่ได้ตั้งค่า Google Client ID
             </button>
           )}
-
-          {/* Dev mode button (visible only when GOOGLE_CLIENT_ID is not set) */}
-          <button
-            className="login-dev-btn"
-            onClick={handleDevLogin}
-            disabled={loading}
-            style={{ marginTop: '0' }}
-          >
-            🔧 เข้าแบบ Developer Mode
-          </button>
         </motion.div>
 
         {error && (

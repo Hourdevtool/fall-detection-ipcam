@@ -7,16 +7,16 @@ import CameraCard from '../components/CameraCard';
 import './DashboardPage.css';
 
 export default function DashboardPage() {
-  const { user, logout, devices, activeDevice, selectDevice, removeDevice, updateDeviceName } = useAuth();
+  const { user, logout, devices, activeDevice, selectDevice, removeDevice, updateDeviceName, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { cameras, loading, error } = useCameraFeed(5000, !!activeDevice); // Polling cameras less frequently since stream is separate
 
   // Check pairing status on mount
   useEffect(() => {
-    if (devices.length === 0) {
+    if (!authLoading && devices.length === 0) {
       navigate('/pair', { replace: true });
     }
-  }, [devices, navigate]);
+  }, [authLoading, devices, navigate]);
 
   const handleEditDeviceName = (e, dev) => {
     e.stopPropagation();
@@ -26,7 +26,7 @@ export default function DashboardPage() {
     }
   };
 
-  if (devices.length === 0 || !activeDevice) {
+  if (authLoading || (devices.length === 0 || !activeDevice)) {
     return (
       <div className="page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <div className="spinner" />
@@ -43,7 +43,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="page-title">🛡️ เครื่องประมวลผลภาพอัจฉริยะเพื่อตรวจจับและแจ้งเตือนการล้มของผู้สูงอายุภายในบ้านด้วยปัญญาประดิษฐ์ (AI) ผ่านระบบไลน์</h1>
           <p className="page-subtitle">
-            {activeDevice ? `อุปกรณ์: ${activeDevice.name}` : 'กำลังค้นหากล้อง...'}
+            {activeDevice ? `อุปกรณ์: ${activeDevice.name} | Token: ${activeDevice.token ? 'OK' : 'MISSING'}` : 'กำลังค้นหากล้อง...'}
           </p>
         </div>
         <button className="dashboard-avatar" onClick={logout} title="ออกจากระบบ">

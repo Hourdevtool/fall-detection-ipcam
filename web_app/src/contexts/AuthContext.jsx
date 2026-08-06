@@ -48,7 +48,7 @@ export function AuthProvider({ children }) {
     const fetchUserDevices = async () => {
       try {
         // Fetch list of system_ids paired to this user
-        const res = await fetch(`${FIREBASE_DB}/users/${user.sub}/devices.json`);
+        const res = await fetch(`${FIREBASE_DB}/users/${user.sub}/devices.json`, { cache: 'no-store' });
         const data = await res.json();
         
         if (!data) {
@@ -65,7 +65,7 @@ export function AuthProvider({ children }) {
         const loadedDevices = await Promise.all(
           deviceEntries.map(async ([systemId, devInfo]) => {
             try {
-              const sysRes = await fetch(`${FIREBASE_DB}/systems/${systemId}.json`);
+              const sysRes = await fetch(`${FIREBASE_DB}/systems/${systemId}.json`, { cache: 'no-store' });
               const sysData = await sysRes.json();
               const url = sysData?.url || '';
 
@@ -131,6 +131,7 @@ export function AuthProvider({ children }) {
   }, [activeDevice]);
 
   async function login(credential) {
+    setLoading(true);
     localStorage.setItem('google_credential', credential);
     setGoogleCredential(credential);
     // User effect will trigger, decode token, and fetch devices
