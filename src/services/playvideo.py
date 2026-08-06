@@ -145,10 +145,9 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
                     # เฟรมนี้แค่วาด overlay สถานะล่าสุด (เร็วมาก)
                     processed_frame = detector.draw_overlay(img_resized, cam_name)
 
-                # Encode JPEG + base64 ตรงนี้เลย (ไม่ต้องส่ง numpy array ข้าม process)
+                # 🚀 OPTIMIZATION: เก็บแค่ JPEG bytes สดๆ เพื่อเอาไปทำ MJPEG Stream (ไม่ต้องแปลงเป็น base64)
                 _, buffer = cv2.imencode('.jpg', processed_frame, jpeg_params)
-                b64_str = base64.b64encode(buffer).decode('utf-8')
-                frame_buffer[ip] = b64_str
+                frame_buffer[ip] = buffer.tobytes()
 
             # 🚀 OPTIMIZATION: จำกัดที่ ~30 FPS (เดิม ~60 FPS)
             time.sleep(0.033)

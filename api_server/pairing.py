@@ -4,6 +4,12 @@ import time
 import uuid
 import os
 import json
+import threading
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "https://YOUR-FIREBASE-PROJECT-ID.firebaseio.com")
 
 SYSTEM_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "system_config.json")
 
@@ -67,6 +73,23 @@ def create_new_pair_code(system_id: str, expires_in: int = 600) -> dict:
         code = generate_pair_code()
         config["pair_code"] = code
         _save_config(config)
+
+    # 🚀 OPTIMIZATION: Push pair_code to Firebase RTDB so the React Web App can discover this system_id
+    def _push_to_firebase():
+        if "YOUR-FIREBASE-PROJECT-ID" in FIREBASE_DATABASE_URL:
+            return
+        try:
+            firebase_url = f"{FIREBASE_DATABASE_URL}/pair_codes/{code}.json"
+            data = {
+                "system_id": system_id,
+                "created_at": time.time()
+            }
+            requests.put(firebase_url, json=data, timeout=5)
+            print(f"✅ Synced Pair Code {code} to Firebase.")
+        except Exception as e:
+            print(f"⚠️ Failed to sync Pair Code to Firebase: {e}")
+
+    threading.Thread(target=_push_to_firebase, daemon=True).start()
 
     entry = {
         "code": code,

@@ -3,7 +3,7 @@ import LiveBadge from './LiveBadge';
 import StatusChip from './StatusChip';
 import './CameraCard.css';
 
-export default function CameraCard({ ip, name, frame, status, onClick }) {
+export default function CameraCard({ ip, name, edgeUrl, status, onClick }) {
   const isFall = status && status.includes('FALL');
 
   return (
@@ -26,12 +26,13 @@ export default function CameraCard({ ip, name, frame, status, onClick }) {
 
       {/* Feed */}
       <div className="camera-card-feed">
-        {frame ? (
+        {edgeUrl ? (
           <img
-            src={`data:image/jpeg;base64,${frame}`}
+            src={`${edgeUrl}/api/stream/${ip}`}
             alt={`Camera ${name}`}
             className="camera-card-image"
             loading="lazy"
+            onError={(e) => { e.target.style.display = 'none'; }}
           />
         ) : (
           <div className="camera-card-placeholder">

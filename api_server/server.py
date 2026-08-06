@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+import asyncio
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -290,6 +291,33 @@ async def get_single_frame(ip: str, current_user: dict = Depends(require_auth)):
         raise HTTPException(status_code=404, detail="Camera not found or no frame available")
 
     return {"ip": ip, "frame": manager.frame_buffer[ip]}
+
+
+@app.get("/api/stream/{ip}")
+async def video_stream(ip: str):
+    """MJPEG stream endpoint for real-time video without base64 overhead."""
+    manager = get_camera_manager()
+    if not manager or not manager.active_cameras.get(ip, False):
+        raise HTTPException(status_code=404, detail="Camera not found or inactive")
+
+    async def frame_generator():
+        last_frame_data = None
+        while True:
+            # ตรวจสอบว่ากล้องยังเปิดอยู่ไหม
+            if not manager.active_cameras.get(ip, False):
+                break
+                
+            frame_data = manager.frame_buffer.get(ip)
+            # ส่งเฟรมใหม่เมื่อมีการเปลี่ยนแปลงเท่านั้น
+            if frame_data and frame_data != last_frame_data:
+                last_frame_data = frame_data
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+            
+            # หน่วงเวลาเล็กน้อยลดการใช้ CPU ของ loop (ประมาณ 30fps)
+            await asyncio.sleep(0.033)
+
+    return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 # ══════════════════════════════════════════

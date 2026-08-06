@@ -1,232 +1,224 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { getMe, loginWithGoogle, submitPairCode } from '../lib/api';
+import { jwtDecode } from 'jwt-decode';
+import { loginWithGoogle, unpair } from '../lib/api';
 
 const AuthContext = createContext(null);
+export const FIREBASE_DB = 'https://fall-detect-832f6-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('fallguard_token'));
+  const [googleCredential, setGoogleCredential] = useState(localStorage.getItem('google_credential'));
+  const [devices, setDevices] = useState([]);
+  const [activeDevice, setActiveDevice] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Multi-device state
-  const [devices, setDevices] = useState(() => {
-    try {
-      const saved = localStorage.getItem('fallguard_devices');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [activeDevice, setActiveDevice] = useState(() => {
-    try {
-      const saved = localStorage.getItem('fallguard_active_device');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
+  // 1. Load User from googleCredential on Mount
   useEffect(() => {
-    if (token) {
-      if (!activeDevice) {
-        setLoading(false);
-        return;
+    if (googleCredential) {
+      try {
+        if (googleCredential === 'dev-mode') {
+          setUser({
+            sub: 'dev_user_001',
+            name: 'Developer',
+            email: 'dev@fallguard.local',
+            picture: ''
+          });
+        } else {
+          const decoded = jwtDecode(googleCredential);
+          setUser(decoded);
+        }
+      } catch (e) {
+        console.error("Invalid token:", e);
+        logout();
       }
-      // Verify token is still valid against the active device
-      getMe(activeDevice)
-        .then((userData) => {
-          setUser(userData);
-          setLoading(false);
-        })
-        .catch(() => {
-          // Token invalid
-          logout();
-          setLoading(false);
-        });
     } else {
       setLoading(false);
     }
-  }, [token, activeDevice]);
+  }, [googleCredential]);
 
-  // --- Auto-Refresh Cloudflare URLs ---
+  // 2. Fetch Devices and Authenticate to Edge Servers
   useEffect(() => {
-    const refreshDeviceUrls = async () => {
-      if (!devices || devices.length === 0) return;
+    if (!user) {
+      setDevices([]);
+      setActiveDevice(null);
+      return;
+    }
 
-      let updated = false;
-      const newDevices = [...devices];
+    let isMounted = true;
+    const fetchUserDevices = async () => {
+      try {
+        // Fetch list of system_ids paired to this user
+        const res = await fetch(`${FIREBASE_DB}/users/${user.sub}/devices.json`);
+        const data = await res.json();
+        
+        if (!data) {
+          if (isMounted) {
+             setDevices([]);
+             setLoading(false);
+          }
+          return;
+        }
 
-      for (let i = 0; i < newDevices.length; i++) {
-        const device = newDevices[i];
-        if (device.pair_code) {
-          try {
-            const res = await fetch(`https://fall-detect-832f6-default-rtdb.asia-southeast1.firebasedatabase.app/pair_codes/${device.pair_code}.json`);
-            const data = await res.json();
-            if (data && data.url && data.url !== device.ip) {
-              console.log(`[Auto-Refresh] อัปเดต URL ของกล้อง ${device.name} เป็น ${data.url}`);
-              device.ip = data.url;
-              updated = true;
+        const deviceEntries = Object.entries(data); // [ [system_id, { name, added_at }], ... ]
+        
+        // Fetch URLs for each system_id and authenticate
+        const loadedDevices = await Promise.all(
+          deviceEntries.map(async ([systemId, devInfo]) => {
+            try {
+              const sysRes = await fetch(`${FIREBASE_DB}/systems/${systemId}.json`);
+              const sysData = await sysRes.json();
+              const url = sysData?.url || '';
+
+              let edgeToken = '';
+              if (url) {
+                // Exchange google credential for edge server token
+                try {
+                  const authRes = await loginWithGoogle(googleCredential, url);
+                  edgeToken = authRes.token;
+                } catch(e) {
+                  console.warn(`Could not auth with ${url}`, e);
+                }
+              }
+
+              return {
+                id: systemId,
+                name: devInfo.name,
+                ip: url,
+                token: edgeToken,
+              };
+            } catch(e) {
+               return null;
             }
-          } catch (e) {
-            console.error(`[Auto-Refresh] ไม่สามารถอัปเดต URL ของกล้อง ${device.name} ได้`, e);
+          })
+        );
+        
+        const validDevices = loadedDevices.filter(Boolean);
+        if (isMounted) {
+          setDevices(validDevices);
+          
+          // Restore active device or set to first
+          const savedActiveId = localStorage.getItem('fallguard_active_device_id');
+          if (savedActiveId && validDevices.find(d => d.id === savedActiveId)) {
+            setActiveDevice(validDevices.find(d => d.id === savedActiveId));
+          } else if (validDevices.length > 0) {
+            setActiveDevice(validDevices[0]);
           }
         }
-      }
-
-      if (updated) {
-        setDevices(newDevices);
-        localStorage.setItem('fallguard_devices', JSON.stringify(newDevices));
-
-        // ถ้า activeDevice ก็เปลี่ยนด้วย ให้ใช้ reference เดียวกันหรือหาใหม่
-        if (activeDevice) {
-          const newActive = newDevices.find(d => d.id === activeDevice.id);
-          if (newActive) {
-            setActiveDevice(newActive);
-            localStorage.setItem('fallguard_active_device', JSON.stringify(newActive));
-          }
-        }
+      } catch (error) {
+        console.error("Failed to load user devices", error);
+      } finally {
+        if (isMounted) setLoading(false);
       }
     };
 
-    refreshDeviceUrls();
-    // Refresh URLs periodically (e.g., every 5 minutes)
-    const interval = setInterval(refreshDeviceUrls, 300000);
-    return () => clearInterval(interval);
-  }, [devices, activeDevice]);
+    fetchUserDevices();
+    
+    // Auto refresh URLs every 5 mins
+    const interval = setInterval(fetchUserDevices, 300000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [user, googleCredential]);
 
-  function login(newToken, userData, googleCredential = null) {
-    localStorage.setItem('fallguard_token', newToken);
-    localStorage.setItem('fallguard_user', JSON.stringify(userData));
-    if (googleCredential) {
-      localStorage.setItem('google_credential', googleCredential);
+  // Save active device
+  useEffect(() => {
+    if (activeDevice) {
+      localStorage.setItem('fallguard_active_device_id', activeDevice.id);
+    } else {
+      localStorage.removeItem('fallguard_active_device_id');
     }
-    setToken(newToken);
-    setUser(userData);
+  }, [activeDevice]);
+
+  async function login(credential) {
+    localStorage.setItem('google_credential', credential);
+    setGoogleCredential(credential);
+    // User effect will trigger, decode token, and fetch devices
   }
 
   function logout() {
-    localStorage.removeItem('fallguard_token');
-    localStorage.removeItem('fallguard_user');
     localStorage.removeItem('google_credential');
-    localStorage.removeItem('fallguard_devices');
-    localStorage.removeItem('fallguard_active_device');
-    setToken(null);
+    localStorage.removeItem('fallguard_active_device_id');
+    setGoogleCredential(null);
     setUser(null);
     setDevices([]);
     setActiveDevice(null);
   }
 
-  function addDevice(name, ip, deviceToken, pairCode, systemId) {
-    const newDevice = {
-      id: systemId || Date.now().toString(),
-      name,
-      ip,
-      token: deviceToken,
-      pair_code: pairCode,
-    };
-    const updatedDevices = [...devices.filter(d => d.id !== newDevice.id), newDevice];
-    setDevices(updatedDevices);
-    localStorage.setItem('fallguard_devices', JSON.stringify(updatedDevices));
-    if (!activeDevice) {
-      setActiveDevice(newDevice);
-      localStorage.setItem('fallguard_active_device', JSON.stringify(newDevice));
-    }
-  }
-
-  // Device management functions
-  async function pairNewDevice(name, ip, code) {
-    // 1. Try to login to the target server to get its JWT token
-    const googleCred = localStorage.getItem('google_credential') || 'dev-mode';
-    const authResult = await loginWithGoogle(googleCred, ip);
-    const deviceToken = authResult.token;
-
-    // 2. Submit the pairing code to the target server using the new token
-    const tempDevice = { ip, token: deviceToken };
-    const pairResult = await submitPairCode(code, tempDevice);
-
-    if (pairResult.success) {
-      const newDevice = {
-        id: pairResult.system_id || Date.now().toString(),
-        name,
-        ip,
-        token: deviceToken,
-        pair_code: code, // เซฟคู่กับ Device เผื่อเอาไว้อัปเดต Cloudflare URL ภายหลัง
-      };
-
-      const updatedDevices = [...devices.filter(d => d.id !== newDevice.id), newDevice];
-      setDevices(updatedDevices);
-      localStorage.setItem('fallguard_devices', JSON.stringify(updatedDevices));
-
-      // Auto-set as active device if none is active
-      if (!activeDevice) {
-        setActiveDevice(newDevice);
-        localStorage.setItem('fallguard_active_device', JSON.stringify(newDevice));
-      }
-      return newDevice;
-    } else {
-      throw new Error("Pairing failed");
-    }
-  }
-
   function selectDevice(device) {
     setActiveDevice(device);
-    localStorage.setItem('fallguard_active_device', JSON.stringify(device));
+  }
+
+  // Exposed for PairPage
+  function addDeviceToState(newDevice) {
+    const updated = [...devices.filter(d => d.id !== newDevice.id), newDevice];
+    setDevices(updated);
+    if (!activeDevice) setActiveDevice(newDevice);
   }
 
   async function removeDevice(deviceId) {
     const device = devices.find(d => d.id === deviceId);
-    if (device) {
+    if (device && device.token) {
       try {
         await unpair(device);
       } catch (e) {
         console.error("Failed to unpair on backend", e);
       }
     }
+    
+    // Remove from Firebase RTDB
+    if (user) {
+      try {
+        await fetch(`${FIREBASE_DB}/users/${user.sub}/devices/${deviceId}.json`, {
+          method: 'DELETE'
+        });
+      } catch (e) {
+         console.error("Failed to delete from Firebase", e);
+      }
+    }
+
     const updated = devices.filter(d => d.id !== deviceId);
     setDevices(updated);
-    localStorage.setItem('fallguard_devices', JSON.stringify(updated));
 
     if (activeDevice?.id === deviceId) {
-      const nextActive = updated.length > 0 ? updated[0] : null;
-      setActiveDevice(nextActive);
-      if (nextActive) {
-        localStorage.setItem('fallguard_active_device', JSON.stringify(nextActive));
-      } else {
-        localStorage.removeItem('fallguard_active_device');
-      }
+      setActiveDevice(updated.length > 0 ? updated[0] : null);
     }
   }
 
   function updateDeviceName(deviceId, newName) {
+    // Also update in Firebase
+    if (user) {
+      fetch(`${FIREBASE_DB}/users/${user.sub}/devices/${deviceId}.json`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: newName })
+      }).catch(e => console.error(e));
+    }
+
     const updated = devices.map(d => 
       d.id === deviceId ? { ...d, name: newName } : d
     );
     setDevices(updated);
-    localStorage.setItem('fallguard_devices', JSON.stringify(updated));
 
     if (activeDevice?.id === deviceId) {
-      const nextActive = updated.find(d => d.id === deviceId);
-      setActiveDevice(nextActive);
-      localStorage.setItem('fallguard_active_device', JSON.stringify(nextActive));
+      setActiveDevice(updated.find(d => d.id === deviceId));
     }
   }
 
   return (
     <AuthContext.Provider value={{
       user,
-      token,
+      token: googleCredential, // Used for legacy compatibility if needed
+      googleCredential,
       loading,
       login,
       logout,
-      isAuthenticated: !!token,
+      isAuthenticated: !!user,
       devices,
       activeDevice,
-      pairNewDevice,
-      addDevice,
       selectDevice,
       removeDevice,
-      updateDeviceName
+      updateDeviceName,
+      addDeviceToState
     }}>
       {children}
     </AuthContext.Provider>
@@ -240,4 +232,3 @@ export function useAuth() {
   }
   return context;
 }
-

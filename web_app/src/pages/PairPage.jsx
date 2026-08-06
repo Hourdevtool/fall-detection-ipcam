@@ -2,15 +2,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import PairCodeInput from '../components/PairCodeInput';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, FIREBASE_DB } from '../contexts/AuthContext';
+import { loginWithGoogle, submitPairCode } from '../lib/api';
 import './PairPage.css';
 
 export default function PairPage() {
   const navigate = useNavigate();
-  const { pairNewDevice, devices } = useAuth();
+  const { user, googleCredential, addDeviceToState, devices } = useAuth();
   
   const [deviceName, setDeviceName] = useState('');
-  const [deviceIp, setDeviceIp] = useState(window.location.host); // Pre-fill with current host
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -26,16 +26,49 @@ export default function PairPage() {
     try {
       // 1. ค้นหา Cloudflare URL จาก Firebase โดยใช้รหัส 6 หลัก
       const fbRes = await fetch(`https://fall-detect-832f6-default-rtdb.asia-southeast1.firebasedatabase.app/pair_codes/${code}.json`);
-      const fbData = await fbRes.json();
+      const pairData = await fbRes.json();
 
-      if (!fbData || !fbData.url) {
-        throw new Error('ไม่พบข้อมูลอุปกรณ์นี้ หรืออุปกรณ์ยังไม่ได้เปิดระบบเชื่อมต่อออนไลน์ (Cloudflare)');
+      if (!pairData || !pairData.system_id) {
+        throw new Error('ไม่พบรหัสอุปกรณ์นี้บนเซิร์ฟเวอร์ หรือรหัสหมดอายุ');
       }
 
-      const cloudflareUrl = fbData.url;
+      const sysRes = await fetch(`https://fall-detect-832f6-default-rtdb.asia-southeast1.firebasedatabase.app/systems/${pairData.system_id}.json`);
+      const sysData = await sysRes.json();
 
-      // 2. ส่งข้อมูลไปที่ AuthContext เพื่อจับคู่
-      await pairNewDevice(deviceName.trim(), cloudflareUrl, code);
+      if (!sysData || !sysData.url) {
+        throw new Error('อุปกรณ์ยังไม่ได้เชื่อมต่ออินเทอร์เน็ต (ไม่มี URL)');
+      }
+
+      const cloudflareUrl = sysData.url;
+      const systemId = pairData.system_id;
+
+      // 2. Authenticate to Edge Server
+      const authRes = await loginWithGoogle(googleCredential, cloudflareUrl);
+      const edgeToken = authRes.token;
+
+      // 3. Submit pair code to Edge Server
+      const pairRes = await submitPairCode(code, { ip: cloudflareUrl, token: edgeToken });
+      if (!pairRes.success) throw new Error("Pairing failed on edge server");
+
+      // 4. Save device to Firebase RTDB for the current user
+      if (user) {
+        await fetch(`${FIREBASE_DB}/users/${user.sub}/devices/${systemId}.json`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: deviceName.trim(),
+            added_at: Date.now()
+          })
+        });
+      }
+
+      // 5. Add to local state
+      addDeviceToState({
+        id: systemId,
+        name: deviceName.trim(),
+        ip: cloudflareUrl,
+        token: edgeToken
+      });
+      
       setSuccess(true);
       setTimeout(() => navigate('/dashboard', { replace: true }), 1500);
     } catch (err) {

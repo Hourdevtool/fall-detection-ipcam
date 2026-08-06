@@ -24,7 +24,7 @@ load_dotenv()
 FIREBASE_DATABASE_URL = os.getenv("FIREBASE_DATABASE_URL", "https://YOUR-FIREBASE-PROJECT-ID.firebaseio.com")
 
 # ชื่อตัวแปร (Node) หลักใน Database
-DATABASE_NODE_PREFIX = "/pair_codes"
+DATABASE_NODE_PREFIX = "/systems"
 
 # พอร์ตของ API Server ที่รันอยู่ (ใน main.py รันที่พอร์ต 8000)
 LOCAL_PORT = int(os.getenv("LOCAL_PORT", "8000"))
@@ -45,24 +45,25 @@ def update_firebase(url):
                 system_id = config.get("system_id", "unknown")
                 pair_code = config.get("pair_code", "unknown")
                 
-        if pair_code == "unknown":
-            print("❌ [ERROR] ไม่พบ pair_code ใน system_config.json กรุณารันระบบหลักเพื่อสร้างรหัสก่อน")
+        if system_id == "unknown":
+            print("❌ [ERROR] ไม่พบ system_id ใน system_config.json กรุณารันระบบหลักเพื่อสร้างรหัสก่อน")
             return
 
-        # 2. ตั้ง URL ปลายทางไปที่โฟลเดอร์ของตัวเอง
-        firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE_PREFIX}/{pair_code}.json"
+        # 2. ตั้ง URL ปลายทางไปที่โฟลเดอร์ systems/{system_id}
+        firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE_PREFIX}/{system_id}.json"
         
         data = {
             "url": url, 
-            "system_id": system_id,
-            "updated_at": time.time()
+            "updated_at": time.time(),
+            "status": "online"
         }
         
-        # ส่ง HTTP PUT ไปยัง Firebase Realtime Database
-        response = requests.put(firebase_url, json=data)
+        # ส่ง HTTP PUT ไปยัง Firebase Realtime Database (อัปเดตหรือสร้างใหม่)
+        # ใช้ PATCH เพื่อไม่ให้ทับข้อมูลอื่นใน node นี้
+        response = requests.patch(firebase_url, json=data)
         
         if response.status_code == 200:
-            print(f"✅ [SUCCESS] อัปเดต URL ประจำกล้อง (รหัส: {pair_code}) ไปที่ Firebase สำเร็จ: {url}")
+            print(f"✅ [SUCCESS] อัปเดต URL ประจำกล้อง (System: {system_id}) ไปที่ Firebase สำเร็จ: {url}")
         else:
             print(f"❌ [ERROR] ไม่สามารถอัปเดต Firebase ได้. Status Code: {response.status_code}")
             print(response.text)

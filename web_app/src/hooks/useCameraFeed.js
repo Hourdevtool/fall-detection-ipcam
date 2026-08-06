@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getFrames, getCameras } from '../lib/api';
+import { getCameras } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 
 /**
@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
  */
 export function useCameraFeed(intervalMs = 1500, enabled = true) {
   const { activeDevice } = useAuth();
-  const [frames, setFrames] = useState({});
+
   const [cameras, setCameras] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -17,18 +17,14 @@ export function useCameraFeed(intervalMs = 1500, enabled = true) {
 
   const fetchData = useCallback(async () => {
     if (!activeDevice) {
-      setFrames({});
+
       setCameras([]);
       setLoading(false);
       return;
     }
     
     try {
-      const [framesData, camerasData] = await Promise.all([
-        getFrames(activeDevice),
-        getCameras(activeDevice),
-      ]);
-      setFrames(framesData);
+      const camerasData = await getCameras(activeDevice);
       setCameras(camerasData);
       setError(null);
       setLoading(false);
@@ -57,6 +53,6 @@ export function useCameraFeed(intervalMs = 1500, enabled = true) {
     };
   }, [enabled, intervalMs, fetchData, activeDevice]);
 
-  return { frames, cameras, loading, error };
+  return { cameras, loading, error };
 }
 

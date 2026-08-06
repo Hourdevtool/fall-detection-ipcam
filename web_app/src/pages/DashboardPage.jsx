@@ -9,7 +9,7 @@ import './DashboardPage.css';
 export default function DashboardPage() {
   const { user, logout, devices, activeDevice, selectDevice, removeDevice, updateDeviceName } = useAuth();
   const navigate = useNavigate();
-  const { frames, cameras, loading, error } = useCameraFeed(1500, !!activeDevice);
+  const { cameras, loading, error } = useCameraFeed(5000, !!activeDevice); // Polling cameras less frequently since stream is separate
 
   // Check pairing status on mount
   useEffect(() => {
@@ -34,7 +34,7 @@ export default function DashboardPage() {
     );
   }
 
-  const cameraEntries = Object.entries(frames);
+
 
   return (
     <div className="page">
@@ -126,13 +126,12 @@ export default function DashboardPage() {
         <motion.div className="camera-grid" layout>
           <AnimatePresence>
             {cameras.map((camera) => {
-              const frame = frames[camera.ip];
               return (
                 <CameraCard
                   key={camera.ip}
                   ip={camera.ip}
                   name={camera.name || camera.ip}
-                  frame={frame}
+                  edgeUrl={activeDevice.ip}
                   status={null}
                 />
               );
