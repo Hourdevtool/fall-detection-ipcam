@@ -1,5 +1,6 @@
 import socket
 import threading
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from onvif import ONVIFCamera
 
@@ -45,6 +46,115 @@ def is_valid_serial(sn):
         return False
     return True
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Scanner Process — ทำงานบน core แยก (multiprocessing)
+#  หน้าที่: สแกน port ทุก IP ในทุก subnet → ส่ง IP ที่พบ port เปิดกลับทาง Queue
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_all_subnets():
+    """ดึง subnet จากทุก network interface ที่มี IPv4 address
+    
+    ใช้ socket.getaddrinfo() กับ hostname เพื่อดึง IP ทุก interface
+    รองรับกรณี PC เชื่อมทั้ง WiFi hotspot (172.20.10.x) และ LAN (192.168.x.x) พร้อมกัน
+    """
+    subnets = set()
+    try:
+        hostname = socket.gethostname()
+        addr_infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in addr_infos:
+            ip = info[4][0]
+            # ข้าม loopback
+            if ip.startswith("127."):
+                continue
+            subnet = ".".join(ip.split(".")[:3])
+            subnets.add(subnet)
+    except Exception as e:
+        print(f"⚠️ getaddrinfo failed: {e}")
+
+    # Fallback: ถ้าไม่เจอ subnet เลย ใช้วิธีเดิม
+    if not subnets:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("1.1.1.1", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            subnets.add(".".join(local_ip.split(".")[:3]))
+        except Exception:
+            pass
+
+    return list(subnets)
+
+
+def _check_port(ip, port, timeout=0.5):
+    """ตรวจสอบว่า port เปิดอยู่หรือไม่"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        result = s.connect_ex((ip, port))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _check_ip_ports(ip):
+    """ตรวจสอบว่า IP นี้มี port ใดเปิดอยู่บ้าง → return (ip, port) หรือ None"""
+    for port in COMMON_PORTS:
+        if _check_port(ip, port):
+            return (ip, port)
+    return None
+
+
+def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multiprocessing.Event):
+    """ฟังก์ชันหลักของ scanner process — รันบน core แยก วน loop ไม่หยุด
+    
+    สแกนทุก subnet → ส่ง (ip, port) ที่เจอกลับทาง Queue
+    """
+    import time
+
+    print("🔄 [Scanner Process] เริ่มทำงานบน core แยก (multiprocessing)")
+
+    while not stop_event.is_set():
+        try:
+            subnets = get_all_subnets()
+            print(f"📡 [Scanner Process] สแกน {len(subnets)} subnet(s): {subnets}")
+
+            # สร้าง list IP ทั้งหมดจากทุก subnet
+            all_ips = []
+            for subnet in subnets:
+                for i in range(1, 255):
+                    all_ips.append(f"{subnet}.{i}")
+
+            # ใช้ ThreadPool ภายใน process เพื่อสแกนหลาย IP พร้อมกัน
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = {executor.submit(_check_ip_ports, ip): ip for ip in all_ips}
+                for future in futures:
+                    if stop_event.is_set():
+                        break
+                    try:
+                        result = future.result(timeout=10)
+                        if result:
+                            ip, port = result
+                            result_queue.put(("found", ip, port))
+                    except Exception:
+                        pass
+
+            # ส่งสัญญาณว่ารอบสแกนเสร็จแล้ว
+            result_queue.put(("scan_complete", None, None))
+
+        except Exception as e:
+            print(f"❌ [Scanner Process] Error: {e}")
+
+        # รอ 15 วินาทีก่อนสแกนรอบถัดไป (ลดจาก 30s เพราะสแกนหลาย subnet)
+        for _ in range(150):  # 150 x 0.1s = 15s, ตรวจ stop_event ทุก 0.1s
+            if stop_event.is_set():
+                break
+            time.sleep(0.1)
+
+    print("🛑 [Scanner Process] หยุดทำงาน")
+
+
 class NetworkScanner:
     def __init__(self, camera_manager):
         self.camera_manager = camera_manager
@@ -52,6 +162,12 @@ class NetworkScanner:
         self.on_camera_found = None
         self.config_file = "config/config.json"
         self.user, self.password, self.line_bot_token, self.line_group_id = self._load_credentials()
+
+        # Multiprocessing resources
+        self._result_queue = multiprocessing.Queue()
+        self._stop_event = multiprocessing.Event()
+        self._scanner_process = None
+        self._reader_thread = None
 
     def _load_credentials(self):
         import json
@@ -93,13 +209,6 @@ class NetworkScanner:
         except Exception as e:
             print(f"❌ Error saving config: {e}")
 
-    def get_local_subnet(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("1.1.1.1", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return ".".join(local_ip.split(".")[:-1])
-
     def check_port(self, ip, port):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.5)
@@ -107,19 +216,27 @@ class NetworkScanner:
         s.close()
         return result == 0
 
-    def get_onvif(self, ip):
+    def get_onvif(self, ip, port=None):
+        """เชื่อมต่อ ONVIF กับกล้องที่ IP นี้ — รันบน main process"""
         # Skip if already active or pending naming dialog
         if self.camera_manager.is_pending_or_active(ip):
             return
 
-        print(f"🔍 [IP: {ip}] เริ่มสแกน...")
-        for port in COMMON_PORTS:
-            if not self.check_port(ip, port):
+        print(f"🔍 [IP: {ip}] เริ่มเชื่อมต่อ ONVIF...")
+
+        # ถ้ามี port ที่รู้แล้ว ลองที่นั้นก่อน แล้วค่อยลองพอร์ตอื่น
+        ports_to_try = []
+        if port:
+            ports_to_try.append(port)
+        ports_to_try.extend([p for p in COMMON_PORTS if p != port])
+
+        for try_port in ports_to_try:
+            if not self.check_port(ip, try_port):
                 continue
             
-            print(f"✅ [IP: {ip}] พอร์ต {port} เปิดอยู่ กำลังเชื่อมต่อ ONVIF...")
+            print(f"✅ [IP: {ip}] พอร์ต {try_port} เปิดอยู่ กำลังเชื่อมต่อ ONVIF...")
             try:
-                cam = ONVIFCamera(ip, port, self.user, self.password)
+                cam = ONVIFCamera(ip, try_port, self.user, self.password)
                 media_service = cam.create_media_service()
                 token = media_service.GetProfiles()[0].token # type: ignore
 
@@ -168,7 +285,6 @@ class NetworkScanner:
                             config = json.load(f)
                             if serial_number in config:
                                 needs_naming = False
-                                # If IP changed, we should probably update it, but for now we just know it's named.
                             elif ip in config:
                                 # Backward compatibility: if it was saved by IP before
                                 needs_naming = False
@@ -216,20 +332,67 @@ class NetworkScanner:
 
             except Exception as e:
                 err_msg = str(e).split('\n')[0][:120]
-                print(f"❌ [IP: {ip}] พอร์ต {port}: {type(e).__name__}: {err_msg}")
+                print(f"❌ [IP: {ip}] พอร์ต {try_port}: {type(e).__name__}: {err_msg}")
                 continue
 
-    def scan_loop(self):
-        subnet = self.get_local_subnet()
-        print(f"📡 เริ่มเดินเครื่องสแกนวง LAN: {subnet}.1 ถึง {subnet}.254")
-        while True:
-            # 🚀 OPTIMIZATION: ลด thread จาก 50 เป็น 20, เพิ่มรอบสแกนเป็น 30 วินาที
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                for i in range(1, 255):
-                    ip = f"{subnet}.{i}"
-                    executor.submit(self.get_onvif, ip)
-            import time
-            time.sleep(30)
+    def _queue_reader_loop(self):
+        """Thread ที่คอยอ่านผลจาก scanner process → เรียก get_onvif() บน main process
+        
+        ทำงานเป็น daemon thread บน main process
+        """
+        import queue
+
+        print("📨 [Queue Reader] เริ่มรอรับผลจาก Scanner Process...")
+
+        while not self._stop_event.is_set():
+            try:
+                msg = self._result_queue.get(timeout=1.0)
+                msg_type, ip, port = msg
+
+                if msg_type == "found":
+                    # ส่ง ONVIF connection ไปทำบน thread แยก (ใน main process)
+                    # เพื่อไม่ให้ block queue reader
+                    threading.Thread(
+                        target=self.get_onvif,
+                        args=(ip, port),
+                        daemon=True,
+                    ).start()
+
+                elif msg_type == "scan_complete":
+                    print("✅ [Queue Reader] สแกนครบ 1 รอบ รอรอบถัดไป...")
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"❌ [Queue Reader] Error: {e}")
+
+        print("🛑 [Queue Reader] หยุดทำงาน")
 
     def start_scanning(self):
-        threading.Thread(target=self.scan_loop, daemon=True).start()
+        """เริ่มสแกนกล้องแบบ multiprocessing — ใช้ 1 core สำหรับ port scanning"""
+        # เริ่ม scanner process (1 core แยก)
+        self._scanner_process = multiprocessing.Process(
+            target=_scanner_process_loop,
+            args=(self._result_queue, self._stop_event),
+            daemon=True,
+            name="CameraScanner",
+        )
+        self._scanner_process.start()
+        print(f"🚀 Scanner Process เริ่มทำงาน (PID: {self._scanner_process.pid})")
+
+        # เริ่ม queue reader thread บน main process
+        self._reader_thread = threading.Thread(
+            target=self._queue_reader_loop,
+            daemon=True,
+            name="QueueReader",
+        )
+        self._reader_thread.start()
+
+    def stop_scanning(self):
+        """หยุด scanner process และ queue reader"""
+        self._stop_event.set()
+        if self._scanner_process and self._scanner_process.is_alive():
+            self._scanner_process.join(timeout=5)
+            if self._scanner_process.is_alive():
+                self._scanner_process.terminate()
+        print("🛑 Scanner หยุดทำงานแล้ว")

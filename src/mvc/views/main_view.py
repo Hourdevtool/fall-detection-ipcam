@@ -185,6 +185,10 @@ class MainView:
                 # Update existing image and visibility of overlay
                 if b64:
                     self.camera_images[ip].src = f"data:image/jpeg;base64,{b64}"
+                    try:
+                        self.camera_images[ip].update()
+                    except Exception:
+                        pass
                 
                 show_offline = not is_active or not b64
                 if self.camera_overlays[ip].visible != show_offline:

@@ -96,8 +96,13 @@ class MainController:
                         self.check_pairing_status()
                     loop_count += 1
                     
-                    # frame_buffer เก็บ base64 string โดยตรง
-                    b64_dict = self.camera_manager.get_frames()
+                    # frame_buffer เก็บ JPEG bytes สดๆ (ไม่ใช่ base64 แล้ว)
+                    raw_dict = self.camera_manager.get_frames()
+                    import base64
+                    b64_dict = {
+                        ip: base64.b64encode(raw_bytes).decode('utf-8')
+                        for ip, raw_bytes in raw_dict.items() if raw_bytes
+                    }
                     active_cams = dict(self.camera_manager.active_cameras)
                     cam_names = dict(self.camera_manager.camera_names)
                     

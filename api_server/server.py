@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 import asyncio
+import ipaddress
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -264,6 +265,11 @@ async def list_cameras(current_user: dict = Depends(require_auth)):
     # ยูเนียนกล้องทั้งหมดจากประวัติการทำงานและที่บันทึกใน config/cameras.json
     all_ips = set(manager.active_cameras.keys()) | set(manager.camera_names.keys())
     for ip in all_ips:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+            
         is_active = manager.active_cameras.get(ip, False)
         cameras.append(CameraInfo(
             ip=ip,
