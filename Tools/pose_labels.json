@@ -1,0 +1,32 @@
+{
+  "labels": {
+    "walk": 0,
+    "stand": 1,
+    "sit": 2,
+    "bend": 3,
+    "fall": 4
+  },
+  "names": {
+    "0": "walk",
+    "1": "stand",
+    "2": "sit",
+    "3": "bend",
+    "4": "fall"
+  },
+  "total_samples": 5640,
+  "samples_per_class": {
+    "walk": 1128,
+    "stand": 1128,
+    "sit": 1128,
+    "bend": 1128,
+    "fall": 1128
+  },
+  "model_file": "multipose_model.pkl",
+  "accuracy": 0.7890070921985816,
+  "cv_mean": 0.8003546099290781,
+  "cv_std": 0.009030377005848828,
+  "n_classes": 5,
+  "n_features": 34,
+  "train_samples": 4512,
+  "test_samples": 1128
+}

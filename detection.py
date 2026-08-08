@@ -18,7 +18,15 @@ class FallDetector:
         if yolo_path is None:
             yolo_path = os.path.join(_PROJECT_ROOT,"Tools", "yolov8n-pose.pt")
         if rf_path is None:
-            rf_path = os.path.join(_PROJECT_ROOT, "Tools", "fall_detect_model.pkl")
+            rf_path = os.path.join(_PROJECT_ROOT, "Tools", "multipose_model.pkl")
+
+        self.pose_labels = {
+            0: "Walk",
+            1: "Stand",
+            2: "Sit",
+            3: "Bend",
+            4: "Fall"
+        }
 
         self.yolo_path = yolo_path
         self.rf_path = rf_path
@@ -181,36 +189,31 @@ class FallDetector:
              prediction = self.fall_model.predict([row])[0]
              prob = self.fall_model.predict_proba([row])[0]
              ai_confidence = prob[prediction]
+             
+             pose_name = self.pose_labels.get(prediction, "Unknown")
               
              box = results[0].boxes.xywh[0].cpu().numpy()
              bw, bh = box[2], box[3]
              aspect_ratio = bw / bh if bh > 0 else 0
              is_falling = False
-             debug_txt = ""
+             debug_txt = f"AI: {pose_name} ({ai_confidence*100:.0f}%)"
 
              # Logic verification
-             if aspect_ratio < 0.90:
-                is_falling = False
-                debug_txt = f"Geo: Force Normal (Standing {aspect_ratio:.2f})"
+             if prediction == 4: 
+                if ai_confidence > 0.4: 
+                    is_falling = True
+                elif aspect_ratio > 1.2:
+                    is_falling = True
+                    debug_txt += " + Geo: Fall"
+                else:
+                    is_falling = False
+                    debug_txt += " -> Ignored"
              else:
-                if prediction == 1: 
-                    if ai_confidence > 0.6: 
-                        is_falling = True
-                        debug_txt = f"AI: Fall ({ai_confidence*100:.0f}%)"
-                    else: 
-                        if aspect_ratio > 1.5:
-                            is_falling = True
-                            debug_txt = "Geo: Fall (AI Low Conf)"
-                        else:
-                            is_falling = False
-                            debug_txt = "AI: Unsure -> Normal"
-                else: 
-                    if aspect_ratio > 2.0:
-                        is_falling = True 
-                        debug_txt = "Geo: Force Fall (Flat)"
-                    else:
-                        is_falling = False
-                        debug_txt = f"AI: Normal ({ai_confidence*100:.0f}%)"
+                 if aspect_ratio > 1.5:
+                     is_falling = True
+                     debug_txt = f"Geo: Override {pose_name}->Fall ({aspect_ratio:.1f})"
+                 else:
+                     is_falling = False
 
              if is_falling:
                  self.fall_counter += 1
@@ -266,12 +269,13 @@ class FallDetector:
                              intruder_color = (255, 255, 255)
             
              cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-             cv2.putText(frame, f"Status: {self.status}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
-             cv2.putText(frame, f"Logic: {debug_txt}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-             cv2.putText(frame, f"Count: {self.fall_counter}/{self.fall_trigger_frames}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+             cv2.putText(frame, f"Pose: {pose_name} ({ai_confidence*100:.0f}%)", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+             cv2.putText(frame, f"Status: {self.status}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
+             cv2.putText(frame, f"Logic: {debug_txt}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+             cv2.putText(frame, f"Count: {self.fall_counter}/{self.fall_trigger_frames}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
              
              if intruder_mode:
-                 cv2.putText(frame, f"Face: {intruder_status_txt}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, intruder_color, 2)
+                 cv2.putText(frame, f"Face: {intruder_status_txt}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, intruder_color, 2)
         else:
             self.status = "No Person"
             cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)

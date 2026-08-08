@@ -25,6 +25,8 @@ lerna-debug.log*
 # ── Logs ──
 logs/
 *.log
+dataset/
+zip/
 
 # ── Database & Generated Data ──
 *.db

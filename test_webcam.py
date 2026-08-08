@@ -7,25 +7,21 @@ def main():
     print("🎥 Fall Guard - Webcam Full System Test 🎥")
     print("==============================================")
     
-    # เปิดโหมดตรวจจับผู้บุกรุก
-    os.environ["INTRUDER_DETECTION"] = "1"
+    # ปิดโหมดตรวจจับใบหน้าชั่วคราว เพื่อลดอาการหน่วง (Lag) ตอนทดสอบท่าทาง
+    os.environ["INTRUDER_DETECTION"] = "0"
     
     # โหลด AI (จะโหลดทั้ง YOLO และ Face Recognition)
     print("⚙️ กำลังโหลดโมเดล AI (การล้ม + ตรวจจับใบหน้า)... อาจใช้เวลาสักครู่")
     
+    import threading
+
     def _on_fall(cam_name, frame, timestamp):
-        try:
-            from api_server.fall_logger import log_fall_event
-            log_fall_event("127.0.0.1", cam_name, frame, timestamp)
-        except Exception as e:
-            print(f"⚠️ Fall logging error: {e}")
+        # ปิดการส่ง LINE ชั่วคราวตามที่ผู้ใช้ร้องขอ
+        print(f"⚠️ [MOCKED] ตรวจพบการล้มที่ {cam_name}! (ปิดระบบแจ้งเตือน LINE แล้ว)")
 
     def _on_intruder(cam_name, frame, timestamp):
-        try:
-            from api_server.fall_logger import log_intruder_event
-            log_intruder_event("127.0.0.1", cam_name, frame, timestamp)
-        except Exception as e:
-            print(f"⚠️ Intruder logging error: {e}")
+        # ปิดการส่ง LINE ชั่วคราวตามที่ผู้ใช้ร้องขอ
+        print(f"⚠️ [MOCKED] ตรวจพบผู้บุกรุกที่ {cam_name}! (ปิดระบบแจ้งเตือน LINE แล้ว)")
 
     detector = FallDetector(conf_threshold=0.4, on_fall_callback=_on_fall, on_intruder_callback=_on_intruder)
     
@@ -39,7 +35,7 @@ def main():
     print("✅ ระบบพร้อมทำงาน! (กดปุ่ม 'q' ที่หน้าต่างภาพเพื่อออก)")
     
     frame_count = 0
-    ai_interval = 3  # ทำ AI ทุก 3 เฟรม
+    ai_interval = 1  # ทำ AI ทุกเฟรม เพื่อไม่ให้เส้น Skeleton กะพริบ
     
     while True:
         ret, frame = cap.read()
@@ -52,10 +48,10 @@ def main():
         
         frame_count += 1
         if frame_count % ai_interval == 0:
-            # ประมวลผล AI เต็ม (YOLO จะ resize เพิ่มเองภายใน)
+            # ประมวลผล AI เต็ม
             processed_frame = detector.process_frame(frame, camera_name="Webcam Test")
         else:
-            # วาดแค่ overlay (เร็วมาก)
+            # วาดแค่ overlay (กรณีที่ตั้ง ai_interval > 1)
             processed_frame = detector.draw_overlay(frame, camera_name="Webcam Test")
         
         # แสดงผลภาพ
