@@ -89,27 +89,34 @@ class MainController:
         async def updater_loop():
             """อัพเดตเฟรมบน Flet event loop โดยตรง — แก้ปัญหาภาพไม่อัพเดตจนกว่าจะขยับ UI"""
             loop_count = 0
+            last_b64_dict = {}  # 🚀 เก็บ b64 ล่าสุดเพื่อ skip เฟรมซ้ำ
             while True:
                 try:
-                    # 🚀 OPTIMIZATION: ตรวจสอบสถานะการเชื่อมต่อทุกๆ ~10 วินาที (100 รอบ x 100ms)
-                    if loop_count % 100 == 0:
+                    # 🚀 ตรวจสอบสถานะการเชื่อมต่อทุกๆ ~10 วินาที (200 รอบ x 50ms)
+                    if loop_count % 200 == 0:
                         self.check_pairing_status()
                     loop_count += 1
                     
-                    # frame_buffer เก็บ JPEG bytes สดๆ (ไม่ใช่ base64 แล้ว)
-                    raw_dict = self.camera_manager.get_frames()
-                    import base64
-                    b64_dict = {
-                        ip: base64.b64encode(raw_bytes).decode('utf-8')
-                        for ip, raw_bytes in raw_dict.items() if raw_bytes
-                    }
-                    active_cams = dict(self.camera_manager.active_cameras)
-                    cam_names = dict(self.camera_manager.camera_names)
+                    # 🚀 get_frames() ตอนนี้ return base64 ที่ pre-encode แล้ว
+                    # ไม่ต้องทำ base64.b64encode ใน UI thread อีกต่อไป!
+                    b64_dict = self.camera_manager.get_frames()
                     
-                    self.view.update_grid(b64_dict, active_cams, cam_names)
+                    # 🚀 Skip ถ้าเฟรมไม่เปลี่ยน (ลด overhead ของ page.update)
+                    has_new_frame = False
+                    for ip, b64 in b64_dict.items():
+                        if b64 and last_b64_dict.get(ip) is not b64:
+                            has_new_frame = True
+                            break
+                    
+                    if has_new_frame or loop_count % 20 == 0:
+                        # มีเฟรมใหม่ หรือ ทุก ~1 วินาที force update (เพื่ออัพเดต overlay status)
+                        active_cams = dict(self.camera_manager.active_cameras)
+                        cam_names = dict(self.camera_manager.camera_names)
+                        self.view.update_grid(b64_dict, active_cams, cam_names)
+                        last_b64_dict = b64_dict
 
-                    # 🚀 OPTIMIZATION: ลดเป็น 10 FPS (เดิม 30 FPS) — กล้องวงจรปิดไม่ต้อง 30 FPS
-                    await asyncio.sleep(0.1)
+                    # 🚀 เพิ่มเป็น 20 FPS (เดิม 10 FPS) — ลื่นขึ้นเยอะ
+                    await asyncio.sleep(0.05)
                 except Exception as e:
                     err_str = str(e).lower()
                     if "destroyed" in err_str or "session" in err_str:
@@ -161,8 +168,9 @@ class MainController:
                         cv2.imencode, '.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
                     )
                     b64_str = base64.b64encode(buffer).decode('utf-8')
-                    image_control.src = f"data:image/jpeg;base64,{b64_str}"
-                    image_control.update()
+                    if image_control.src != f"data:image/jpeg;base64,{b64_str}":
+                        image_control.src = f"data:image/jpeg;base64,{b64_str}"
+                        image_control.update()
                 await asyncio.sleep(0.033)
                 
         self.page.run_task(update_webcam)

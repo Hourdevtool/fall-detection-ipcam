@@ -8,7 +8,8 @@ class CameraManager:
         # ใช้ dict ธรรมดา + threading แทน multiprocessing.Manager().dict()
         # → ไม่ต้อง pickle/unpickle frame ทุกรอบ (ประหยัดเวลาหลาย 100ms)
         self.active_cameras = {}
-        self.frame_buffer = {}   # เก็บ base64 string โดยตรง (ไม่ใช่ numpy array)
+        self.frame_buffer = {}       # เก็บ raw JPEG bytes สำหรับ MJPEG web stream
+        self.frame_buffer_b64 = {}   # 🚀 เก็บ base64 string ที่ pre-encode แล้ว สำหรับ Flet UI
         self.camera_names = {}
         self.pending_naming = set()
         self._lock = threading.Lock()
@@ -85,13 +86,18 @@ class CameraManager:
         self.active_cameras[ip] = True
         # ใช้ threading.Thread แทน multiprocessing.Process
         # → แชร์ dict เดียวกันได้โดยตรง ไม่ต้องผ่าน Manager proxy
+        # 🚀 ส่ง frame_buffer_b64 เพิ่มเพื่อให้ camera thread pre-encode base64
         t = threading.Thread(
             target=play_stream_pyav,
-            args=(ip, rtsp_url, self.active_cameras, self.frame_buffer, self.camera_names),
+            args=(ip, rtsp_url, self.active_cameras, self.frame_buffer, self.camera_names, self.frame_buffer_b64),
             daemon=True,
         )
         t.start()
 
     def get_frames(self):
-        # Return a shallow copy to prevent dictionary size change during iteration
+        """Return pre-encoded base64 frames สำหรับ Flet UI (ไม่ต้อง encode เองใน UI thread)"""
+        return dict(self.frame_buffer_b64)
+
+    def get_raw_frames(self):
+        """Return raw JPEG bytes สำหรับ MJPEG web stream"""
         return dict(self.frame_buffer)

@@ -29,7 +29,7 @@ def _get_shared_detector(on_fall_callback=None, on_intruder_callback=None):
     return _shared_detector
 
 
-def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
+def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, frame_buffer_b64=None):
     print(f"🎬 [เริ่มดึงภาพ] IP: {ip} (ด้วย PyAV)")
     
     # Load camera name from config/cameras.json or shared dict
@@ -114,49 +114,79 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names):
     reader_thread = threading.Thread(target=read_frames, daemon=True)
     reader_thread.start()
 
-    # --- Processing loop: ประมวลผล AI ทุก N เฟรม, encode JPEG+base64 ในนี้เลย ---
-    frame_count = 0
-    ai_interval = 5  # 🚀 OPTIMIZATION: ประมวลผล AI ทุก 5 เฟรม (เดิม 3)
-    jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 60]  # 🚀 OPTIMIZATION: ลด quality จาก 70 เป็น 60
+    # --- AI thread: ประมวลผล YOLO + RF แยกออกจาก display pipeline ---
+    # เก็บผลลัพธ์ AI ล่าสุดไว้ให้ display loop เอาไปวาด overlay
+    ai_result_frame = [None]  # เฟรมที่ผ่าน AI แล้ว (มี skeleton + overlay)
+    ai_frame_lock = threading.Lock()
+
+    def ai_worker():
+        """รัน AI inference แยก thread — ไม่ block display pipeline"""
+        ai_interval_sec = 0.15  # ~6-7 FPS สำหรับ AI (เพียงพอสำหรับ fall detection)
+        while running[0] and active_cameras.get(ip, False):
+            frame_img = latest_frame[0]
+            if frame_img is not None:
+                cam_name = camera_names.get(ip, camera_name)
+                try:
+                    # Resize สำหรับ AI (640x360 เพื่อความแม่นยำ)
+                    img_for_ai = cv2.resize(frame_img, (640, 360), interpolation=cv2.INTER_LINEAR)
+                    processed = detector.process_frame(img_for_ai, cam_name)
+                    with ai_frame_lock:
+                        ai_result_frame[0] = processed
+                except Exception as e:
+                    print(f"⚠️ [AI] IP: {ip} -> {type(e).__name__}: {e}")
+            time.sleep(ai_interval_sec)
+
+    ai_thread = threading.Thread(target=ai_worker, daemon=True)
+    ai_thread.start()
+
+    # --- Display loop: วาด overlay + encode JPEG + base64 ทันที (ไม่รอ AI) ---
+    jpeg_params = [cv2.IMWRITE_JPEG_QUALITY, 50]  # 🚀 ลด quality จาก 60 → 50
 
     try:
         while running[0] and active_cameras.get(ip, False):
             # ตรวจสอบว่าสตรีมค้างหรือไม่ (ไม่ได้เฟรมใหม่เกิน 8 วินาที)
             if time.time() - last_frame_time[0] > 8.0:
-                print(f"⚠️ [Processor] IP: {ip} -> ไม่ได้รับเฟรมใหม่เกิน 8 วินาที (สตรีมค้าง) ทำการปิดเพื่อเชื่อมต่อใหม่")
+                print(f"⚠️ [Display] IP: {ip} -> ไม่ได้รับเฟรมใหม่เกิน 8 วินาที (สตรีมค้าง)")
                 running[0] = False
                 break
 
-            frame_img = latest_frame[0]
-            if frame_img is not None:
-                # รีเซ็ตเฟรมล่าสุดเพื่อไม่ให้ประมวลผลซ้ำจนกว่าจะมีเฟรมใหม่
-                latest_frame[0] = None
-                
-                cam_name = camera_names.get(ip, camera_name)
+            # ใช้เฟรมจาก AI ถ้ามี (มี skeleton + status overlay ครบ)
+            # ถ้า AI ยังไม่พร้อม ก็ใช้เฟรมดิบ + วาด overlay เบาๆ
+            display_frame = None
+            with ai_frame_lock:
+                if ai_result_frame[0] is not None:
+                    display_frame = ai_result_frame[0].copy()
 
-                # 🚀 OPTIMIZATION: Resize ให้เล็กลงก่อน (ตัว YOLO จะ resize เพิ่มเองอีกที)
-                img_resized = cv2.resize(frame_img, (640, 360), interpolation=cv2.INTER_LINEAR)
+            if display_frame is None:
+                # AI ยังไม่มีผลลัพธ์ — ใช้เฟรมดิบ + overlay สถานะล่าสุด
+                raw = latest_frame[0]
+                if raw is not None:
+                    cam_name = camera_names.get(ip, camera_name)
+                    display_frame = cv2.resize(raw, (640, 360), interpolation=cv2.INTER_LINEAR)
+                    display_frame = detector.draw_overlay(display_frame, cam_name)
 
-                frame_count += 1
-                if frame_count % ai_interval == 0:
-                    # เฟรมนี้ทำ AI เต็ม (YOLO + Fall Detection)
-                    processed_frame = detector.process_frame(img_resized, cam_name)
-                else:
-                    # เฟรมนี้แค่วาด overlay สถานะล่าสุด (เร็วมาก)
-                    processed_frame = detector.draw_overlay(img_resized, cam_name)
+            if display_frame is not None:
+                # Encode JPEG
+                _, buffer = cv2.imencode('.jpg', display_frame, jpeg_params)
+                jpeg_bytes = buffer.tobytes()
 
-                # 🚀 OPTIMIZATION: เก็บแค่ JPEG bytes สดๆ เพื่อเอาไปทำ MJPEG Stream (ไม่ต้องแปลงเป็น base64)
-                _, buffer = cv2.imencode('.jpg', processed_frame, jpeg_params)
-                frame_buffer[ip] = buffer.tobytes()
+                # เก็บ raw JPEG bytes สำหรับ MJPEG web stream
+                frame_buffer[ip] = jpeg_bytes
 
-            # 🚀 OPTIMIZATION: จำกัดที่ ~30 FPS (เดิม ~60 FPS)
+                # 🚀 Pre-encode base64 สำหรับ Flet UI (ไม่ต้องทำใน UI thread)
+                if frame_buffer_b64 is not None:
+                    frame_buffer_b64[ip] = base64.b64encode(jpeg_bytes).decode('utf-8')
+
+            # 🚀 ~30 FPS display rate
             time.sleep(0.033)
     except Exception as e:
-        print(f"❌ [Processor] IP: {ip} -> {type(e).__name__}: {e}")
+        print(f"❌ [Display] IP: {ip} -> {type(e).__name__}: {e}")
     finally:
         running[0] = False
         active_cameras[ip] = False
         if ip in frame_buffer:
             del frame_buffer[ip]
+        if frame_buffer_b64 is not None and ip in frame_buffer_b64:
+            del frame_buffer_b64[ip]
         container.close()
         print(f"🛑 [ปิดสตรีม] IP: {ip}")

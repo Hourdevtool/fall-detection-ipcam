@@ -286,17 +286,17 @@ async def get_all_frames(current_user: dict = Depends(require_auth)):
     if not manager:
         return {}
 
-    return dict(manager.frame_buffer)
+    return dict(manager.frame_buffer_b64)
 
 
 @app.get("/api/frames/{ip}")
 async def get_single_frame(ip: str, current_user: dict = Depends(require_auth)):
     """Get base64 JPEG frame from a specific camera."""
     manager = get_camera_manager()
-    if not manager or ip not in manager.frame_buffer:
+    if not manager or ip not in manager.frame_buffer_b64:
         raise HTTPException(status_code=404, detail="Camera not found or no frame available")
 
-    return {"ip": ip, "frame": manager.frame_buffer[ip]}
+    return {"ip": ip, "frame": manager.frame_buffer_b64[ip]}
 
 
 @app.get("/api/stream/{ip}")

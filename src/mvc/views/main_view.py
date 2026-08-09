@@ -142,7 +142,6 @@ class MainView:
             if ip not in self.camera_images:
                 # Create a new Image control
                 # If there's no frame yet, use a 1x1 transparent GIF base64
-                transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                 img_src = f"data:image/jpeg;base64,{b64}" if b64 else f"data:image/gif;base64,{transparent_pixel}"
                 img = ft.Image(src=img_src, fit="contain", gapless_playback=True) # type: ignore
                 
