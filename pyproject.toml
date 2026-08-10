@@ -21,6 +21,7 @@ dependencies = [
     "python-multipart>=0.0.30",
     "qrcode>=8.2",
     "scikit-learn>=1.8.0",
+    "PyTurboJPEG>=1.7.1",
     "ultralytics>=8.4.53",
     "uvicorn>=0.48.0",
     "wsdiscovery>=2.1.2",

@@ -1,6 +1,9 @@
 import flet as ft
 import os
 
+# 1x1 transparent GIF — used as placeholder when no frame is available yet
+TRANSPARENT_PIXEL = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
 def is_valid_ip(ip_str):
     if not isinstance(ip_str, str):
         return False
@@ -142,7 +145,7 @@ class MainView:
             if ip not in self.camera_images:
                 # Create a new Image control
                 # If there's no frame yet, use a 1x1 transparent GIF base64
-                img_src = f"data:image/jpeg;base64,{b64}" if b64 else f"data:image/gif;base64,{transparent_pixel}"
+                img_src = f"data:image/jpeg;base64,{b64}" if b64 else f"data:image/gif;base64,{TRANSPARENT_PIXEL}"
                 img = ft.Image(src=img_src, fit="contain", gapless_playback=True) # type: ignore
                 
                 offline_overlay = ft.Container(

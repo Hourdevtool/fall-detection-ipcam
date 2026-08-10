@@ -235,7 +235,14 @@ class FallDetector:
                  self.status = 'normal'
                  self.color = (0, 255, 0) # Green
                  self._fall_callback_fired = False  # Reset for next fall
-            
+
+             # Save AI state for smooth 30FPS overlay
+             self.last_kpts_xyn = results[0].keypoints.xyn[0].cpu().numpy()
+             self.last_box_xyxyn = results[0].boxes.xyxyn[0].cpu().numpy()
+             self.last_pose_name = pose_name
+             self.last_ai_conf = float(ai_confidence)
+             self.last_debug_txt = debug_txt
+             
              # --- Intruder Detection (throttled) ---
              intruder_mode = os.environ.get("INTRUDER_DETECTION") == "1"
              intruder_status_txt = self.last_intruder_msg
@@ -278,6 +285,10 @@ class FallDetector:
                  cv2.putText(frame, f"Face: {intruder_status_txt}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, intruder_color, 2)
         else:
             self.status = "No Person"
+            self.last_kpts_xyn = None
+            self.last_box_xyxyn = None
+            self.last_pose_name = "Unknown"
+            self.last_debug_txt = ""
             cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             cv2.putText(frame, self.status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
@@ -285,6 +296,36 @@ class FallDetector:
 
     def draw_overlay(self, frame, camera_name="Unknown"):
         """Draw the last known status overlay without running AI inference."""
+        h, w = frame.shape[:2]
+        
+        # Draw bounding box and skeleton if available
+        if getattr(self, 'last_box_xyxyn', None) is not None:
+            box = self.last_box_xyxyn
+            x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            
+        if getattr(self, 'last_kpts_xyn', None) is not None:
+            for pt in self.last_kpts_xyn:
+                px, py = int(pt[0]*w), int(pt[1]*h)
+                if px > 0 and py > 0:
+                    cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)
+                    
         cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(frame, f"Status: {self.status}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
+        
+        pose_name = getattr(self, 'last_pose_name', 'Unknown')
+        ai_conf = getattr(self, 'last_ai_conf', 0.0)
+        if pose_name != 'Unknown':
+            cv2.putText(frame, f"Pose: {pose_name} ({ai_conf*100:.0f}%)", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
+            
+        cv2.putText(frame, f"Status: {self.status}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
+        
+        debug_txt = getattr(self, 'last_debug_txt', '')
+        if debug_txt:
+            cv2.putText(frame, f"Logic: {debug_txt}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            cv2.putText(frame, f"Count: {self.fall_counter}/{self.fall_trigger_frames}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+        intruder_mode = os.environ.get("INTRUDER_DETECTION") == "1"
+        if intruder_mode and hasattr(self, 'last_intruder_msg') and self.last_intruder_msg:
+            cv2.putText(frame, f"Face: {self.last_intruder_msg}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, getattr(self, 'last_intruder_color', (255,255,255)), 2)
+
         return frame

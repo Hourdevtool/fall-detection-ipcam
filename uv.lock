@@ -186,6 +186,7 @@ dependencies = [
     { name = "pygame" },
     { name = "pyjwt" },
     { name = "python-multipart" },
+    { name = "pyturbojpeg" },
     { name = "qrcode" },
     { name = "scikit-learn" },
     { name = "ultralytics" },
@@ -209,6 +210,7 @@ requires-dist = [
     { name = "pygame", specifier = ">=2.6.1" },
     { name = "pyjwt", specifier = ">=2.13.0" },
     { name = "python-multipart", specifier = ">=0.0.30" },
+    { name = "pyturbojpeg", specifier = ">=1.7.1" },
     { name = "qrcode", specifier = ">=8.2" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "ultralytics", specifier = ">=8.4.53" },
@@ -1819,6 +1821,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4b/82/c8cd43a6e0719bf5a3b034f6726dd701f75829c08944c83d4b95d02ed0e8/python_multipart-0.0.30.tar.gz", hash = "sha256:0edfe0475c1f46ddd3ff7785a626f6118af32bdcf359bb21260367313bb32118", size = 46316, upload-time = "2026-05-31T19:24:55.198Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/fd/0318007beb234790993d3ec5afd051d1dbceb733e81e3afe2b981ece3f37/python_multipart-0.0.30-py3-none-any.whl", hash = "sha256:830964def8c90607ac5daa00514e3987815865713ade8d20febc9177ac0c3c5b", size = 29730, upload-time = "2026-05-31T19:24:53.814Z" },
+]
+
+[[package]]
+name = "pyturbojpeg"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/fe/b525bca5e85688a283839126095d3e7e6d9bb5e7f23c68e57ad30f43af14/pyturbojpeg-2.5.0.tar.gz", hash = "sha256:572e74886110e0bd85f8a95a188f1cda94c4a5f0222ff38a22d7e12faeb9844b", size = 49265, upload-time = "2026-07-14T16:00:50.511Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/e4/b19be937c95df9a02d6337178088b56fe77c2656eab46489344c7ac510e9/pyturbojpeg-2.5.0-py3-none-any.whl", hash = "sha256:2c10c2de86aa0e4fd9d08de187e46e975d108db35c25842d342393913cf54c36", size = 27455, upload-time = "2026-07-14T16:00:49.05Z" },
 ]
 
 [[package]]
