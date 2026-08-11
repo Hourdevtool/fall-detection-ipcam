@@ -200,18 +200,27 @@ class FallDetector:
 
              # Logic verification
              if prediction == 4: 
-                if ai_confidence > 0.4: 
+                # ถ้า AI มั่นใจมากๆ ว่าล้มให้แจ้งเตือนเลย (เพิ่มจาก >0.4 เป็น >0.65)
+                if ai_confidence > 0.65: 
                     is_falling = True
-                elif aspect_ratio > 1.2:
+                # ถ้าความมั่นใจกลางๆ ให้พิจารณาสัดส่วนว่าแบนลงไปกับพื้นจริง (กว้างกว่าสูงเยอะๆ)
+                elif ai_confidence > 0.4 and aspect_ratio > 1.3:
                     is_falling = True
-                    debug_txt += " + Geo: Fall"
+                    debug_txt += f" + Geo: Fall (AR={aspect_ratio:.1f})"
                 else:
                     is_falling = False
-                    debug_txt += " -> Ignored"
+                    debug_txt += f" -> Ignored (Not flat enough, AR={aspect_ratio:.1f})"
              else:
-                 if aspect_ratio > 1.5:
+                 # If aspect ratio is very high (> 2.0), it's likely a fall.
+                 # Also prevent false positives when face is too close to camera (box width almost full screen)
+                 is_close_up = (bw / small_w) > 0.85
+                 
+                 if aspect_ratio > 2.0 and not is_close_up:
                      is_falling = True
                      debug_txt = f"Geo: Override {pose_name}->Fall ({aspect_ratio:.1f})"
+                 elif aspect_ratio > 1.5 and is_close_up:
+                     is_falling = False
+                     debug_txt = f"Geo: Ignored (Close Up {aspect_ratio:.1f})"
                  else:
                      is_falling = False
 

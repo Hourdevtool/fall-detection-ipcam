@@ -25,6 +25,8 @@ dependencies = [
     "ultralytics>=8.4.53",
     "uvicorn>=0.48.0",
     "wsdiscovery>=2.1.2",
+    "deepface>=0.0.100",
+    "tf-keras>=2.21.0",
 ]
 
 [tool.pyright]

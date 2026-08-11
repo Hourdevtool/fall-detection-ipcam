@@ -13,16 +13,37 @@ def run_api_server():
     print("🚀 Starting API Server in background thread...")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
+_global_camera_manager = None
+_global_network_scanner = None
+
 def main(page: ft.Page):
+    global _global_camera_manager, _global_network_scanner
+    
     # ตั้งค่าหน้าจอเป็นแบบเต็มหน้าจอ (Fullscreen) และไม่มีกรอบขอบหน้าต่าง (Frameless/Borderless)
     page.window.full_screen = True
     page.window.frameless = True
     page.window.title_bar_hidden = True
     
     controller = MainController(page)
-    # แชร์ CameraManager instance ให้กับ API Server เพื่อให้ Web App ดึงภาพได้
-    set_camera_manager(controller.camera_manager)
-    controller.start()
+    
+    # กรณีที่มีการหลุดการเชื่อมต่อและ reconnect ใหม่ (session ใหม่)
+    if _global_camera_manager is not None:
+        print("🔄 Flet reconnected. Restoring CameraManager and NetworkScanner state...")
+        controller.camera_manager = _global_camera_manager
+        controller.network_scanner = _global_network_scanner
+        # ผูก callback ใหม่เข้ากับ controller ตัวใหม่
+        controller.network_scanner.on_camera_found = controller.on_camera_found
+        
+        from api_server.pairing import get_or_create_system_id
+        controller.system_id = get_or_create_system_id()
+        controller.check_pairing_status()
+        controller.start_frame_updater()
+    else:
+        _global_camera_manager = controller.camera_manager
+        _global_network_scanner = controller.network_scanner
+        # แชร์ CameraManager instance ให้กับ API Server เพื่อให้ Web App ดึงภาพได้
+        set_camera_manager(controller.camera_manager)
+        controller.start()
 
 if __name__ == "__main__":
     import multiprocessing
