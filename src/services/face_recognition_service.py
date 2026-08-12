@@ -17,7 +17,7 @@ class FaceRecognitionService:
         if not os.path.exists(self.db_path):
             os.makedirs(self.db_path)
 
-    def register_face(self, image, person_name, angle):
+    def register_face(self, image, person_name, angle, phone="", gender=""):
         try:
             # Extract embedding (enforce_detection=False so it doesn't crash)
             embedding_objs = DeepFace.represent(img_path=image, model_name=self.model_name, detector_backend=self.detector_backend, enforce_detection=False)
@@ -38,6 +38,25 @@ class FaceRecognitionService:
             file_path = os.path.join(person_dir, f"{angle}.json")
             with open(file_path, "w") as f:
                 json.dump(embedding, f)
+                
+            # Save info.json if phone or gender are provided
+            if phone or gender:
+                info_path = os.path.join(person_dir, "info.json")
+                info_data = {}
+                # if exists, read first to keep existing data (in case they capture another angle)
+                if os.path.exists(info_path):
+                    try:
+                        with open(info_path, "r", encoding="utf-8") as f:
+                            info_data = json.load(f)
+                    except:
+                        pass
+                if phone:
+                    info_data["phone"] = phone
+                if gender:
+                    info_data["gender"] = gender
+                
+                with open(info_path, "w", encoding="utf-8") as f:
+                    json.dump(info_data, f, ensure_ascii=False, indent=4)
             
             # Update memory
             if person_name not in self.known_embeddings:
@@ -55,7 +74,7 @@ class FaceRecognitionService:
             if os.path.isdir(person_dir):
                 self.known_embeddings[person_name] = {}
                 for file_name in os.listdir(person_dir):
-                    if file_name.endswith(".json"):
+                    if file_name.endswith(".json") and file_name != "info.json":
                         angle = file_name.split(".")[0]
                         file_path = os.path.join(person_dir, file_name)
                         try:

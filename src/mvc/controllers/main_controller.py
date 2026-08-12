@@ -175,7 +175,7 @@ class MainController:
                 
         self.page.run_task(update_webcam)
 
-    def capture_face(self, name, angle, status_text_control):
+    def capture_face(self, name, angle, status_text_control, phone="", gender=""):
         if not hasattr(self, 'current_webcam_frame') or self.current_webcam_frame is None:
             status_text_control.value = "ไม่พบภาพจากกล้อง"
             status_text_control.color = "red"
@@ -198,7 +198,7 @@ class MainController:
         def process():
             try:
                 service = FaceRecognitionService()
-                success, msg = service.register_face(temp_img_path, name, angle)
+                success, msg = service.register_face(temp_img_path, name, angle, phone, gender)
                 if success:
                     status_text_control.value = f"บันทึกภาพ {angle} ของ {name} สำเร็จ!"
                     status_text_control.color = "green"

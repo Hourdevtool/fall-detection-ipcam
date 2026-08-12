@@ -25,6 +25,14 @@ export function AuthProvider({ children }) {
           });
         } else {
           const decoded = jwtDecode(googleCredential);
+          
+          // Check if token is expired (exp is in seconds)
+          if (decoded.exp * 1000 < Date.now()) {
+            console.warn("Google token expired, logging out");
+            logout();
+            return;
+          }
+          
           setUser(decoded);
         }
       } catch (e) {

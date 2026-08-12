@@ -410,16 +410,28 @@ class MainView:
             gapless_playback=True
         ) # type: ignore
         self.reg_name_input = ft.TextField(label="ชื่อสมาชิกครอบครัว", hint_text="ระบุชื่อ (ภาษาอังกฤษ/ไทย)")
+        self.reg_phone_input = ft.TextField(label="เบอร์โทรศัพท์", hint_text="เช่น 0812345678")
+        self.reg_gender_dropdown = ft.Dropdown(
+            label="เพศ",
+            options=[
+                ft.dropdown.Option("ชาย"),
+                ft.dropdown.Option("หญิง"),
+                ft.dropdown.Option("อื่นๆ")
+            ],
+            width=200
+        )
         self.reg_status_text = ft.Text("")
         
         def on_capture(angle):
             name = self.reg_name_input.value.strip() if self.reg_name_input.value else ""
+            phone = self.reg_phone_input.value.strip() if self.reg_phone_input.value else ""
+            gender = self.reg_gender_dropdown.value if self.reg_gender_dropdown.value else ""
             if not name:
                 self.reg_status_text.value = "กรุณาระบุชื่อก่อนบันทึกภาพ"
                 self.reg_status_text.color = "red"
                 self.page.update()
                 return
-            capture_callback(name, angle, self.reg_status_text)
+            capture_callback(name, angle, self.reg_status_text, phone, gender)
             
         def on_close(e):
             try:
@@ -432,6 +444,7 @@ class MainView:
             title=ft.Text("ลงทะเบียนสมาชิกครอบครัว"),
             content=ft.Column([
                 self.reg_name_input,
+                ft.Row([self.reg_phone_input, self.reg_gender_dropdown], alignment=ft.MainAxisAlignment.CENTER),
                 self.reg_image,
                 self.reg_status_text,
                 ft.Row([
