@@ -167,7 +167,7 @@ class MainView:
                             bgcolor="#80000000",
                             padding=5,
                             border_radius=5,
-                            alignment=ft.Alignment(-1, -1) # top_left
+                            alignment=ft.Alignment(-1, 1) # bottom_left
                         )
                     ]),
                     border_radius=10,

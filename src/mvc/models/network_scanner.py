@@ -222,6 +222,14 @@ class NetworkScanner:
         if self.camera_manager.is_pending_or_active(ip):
             return
 
+        # Skip local machine IP (e.g. FastAPI on 8000)
+        try:
+            local_ips = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+            if ip in local_ips or ip.startswith("127."):
+                return
+        except Exception:
+            pass
+
         print(f"🔍 [IP: {ip}] เริ่มเชื่อมต่อ ONVIF...")
 
         # ถ้ามี port ที่รู้แล้ว ลองที่นั้นก่อน แล้วค่อยลองพอร์ตอื่น
@@ -300,28 +308,35 @@ class NetworkScanner:
 
                     # ลอง 3 วิธีตามลำดับ: plain → TCP → UDP พร้อม Timeout 5 วินาที
                     av_options_list = [
-                        {'stimeout': '5000000'},  # plain พร้อม timeout
-                        {'rtsp_transport': 'tcp', 'stimeout': '5000000'},
-                        {'rtsp_transport': 'udp', 'stimeout': '5000000'},
+                        {'stimeout': '2000000'},
+                        {'rtsp_transport': 'tcp', 'stimeout': '2000000'},
+                        {'rtsp_transport': 'udp', 'stimeout': '2000000'},
                     ]
-                    for av_opts in av_options_list:
-                        try:
-                            container = av.open(rtsp_url, mode='r', options=av_opts or None)
-                            for frame in container.decode(video=0):
-                                img = frame.to_ndarray(format='bgr24')
-                                fd, temp_path = tempfile.mkstemp(suffix=".jpg")
-                                import os
-                                os.close(fd)
-                                cv2.imwrite(temp_path, img)
-                                proto = av_opts.get('rtsp_transport', 'plain').upper()
-                                print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
-                                break
-                            container.close()
-                            if temp_path:
-                                break  # สำเร็จแล้ว หยุด
-                        except Exception as e:
-                            proto = av_opts.get('rtsp_transport', 'plain').upper()
-                            print(f"⚠️ [IP: {ip}] ดึงภาพไม่สำเร็จ ({proto}): {type(e).__name__}: {e}")
+                    # Candidate URLs
+                    candidates = [
+                        rtsp_url,
+                        f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=1.sdp",
+                        f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
+                    ]
+                    for candidate in candidates:
+                        for av_opts in av_options_list:
+                            try:
+                                container = av.open(candidate, mode='r', options=av_opts or None)
+                                for frame in container.decode(video=0):
+                                    img = frame.to_ndarray(format='bgr24')
+                                    fd, temp_path = tempfile.mkstemp(suffix=".jpg")
+                                    os.close(fd)
+                                    cv2.imwrite(temp_path, img)
+                                    proto = av_opts.get('rtsp_transport', 'plain').upper()
+                                    print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
+                                    break
+                                container.close()
+                                if temp_path:
+                                    break
+                            except Exception:
+                                pass
+                        if temp_path:
+                            break
 
                     if not temp_path:
                         print(f"ℹ️ [IP: {ip}] เพิ่มกล้องโดยไม่มีภาพตัวอย่าง")

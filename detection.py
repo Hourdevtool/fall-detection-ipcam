@@ -12,11 +12,44 @@ import tempfile
 
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+
+class _CameraState:
+    """Per-camera (or per-sub-frame) detection state."""
+    def __init__(self):
+        self.fall_counter = 0
+        self.status = 'normal'
+        self.color = (0, 255, 0)
+        self._fall_callback_fired = False
+        self.persons_data = []
+        self.debug_txt = ""
+        self.last_intruder_msg = ""
+        self.last_intruder_color = (255, 255, 255)
+        self.last_face_check_time = 0
+
+
+def _draw_text_with_badge(img, text, pos, font_scale=0.6, text_color=(255, 255, 255), bg_color=(0, 0, 0), thickness=2, padding=4):
+    """Draw high-contrast text with background box so it's always clear and readable."""
+    x, y = pos
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    
+    # Draw background rectangle
+    cv2.rectangle(
+        img,
+        (x - padding, y - text_h - padding),
+        (x + text_w + padding, y + baseline + padding),
+        bg_color,
+        cv2.FILLED
+    )
+    # Draw text
+    cv2.putText(img, text, (x, y), font, font_scale, text_color, thickness, cv2.LINE_AA)
+    return text_h + baseline + padding * 2
+
+
 class FallDetector:
-    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.7, fall_trigger_frames=10, on_fall_callback=None, on_intruder_callback=None):
-        # ใช้ absolute path เพื่อให้ subprocess หาไฟล์เจอเสมอ
+    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.5, fall_trigger_frames=6, on_fall_callback=None, on_intruder_callback=None):
         if yolo_path is None:
-            yolo_path = os.path.join(_PROJECT_ROOT,"Tools", "yolov8n-pose.pt")
+            yolo_path = os.path.join(_PROJECT_ROOT, "Tools", "yolov8n-pose.pt")
         if rf_path is None:
             rf_path = os.path.join(_PROJECT_ROOT, "Tools", "multipose_model.pkl")
 
@@ -44,14 +77,21 @@ class FallDetector:
              print(f"❌ Could not load RF model from {self.rf_path}. Error: {e}")
              self.fall_model = None
 
+        self._camera_states = {}
+
         self.fall_counter = 0
         self.status = 'normal'
         self.color = (0, 255, 0)
+        self.last_kpts_xyn = None
+        self.last_box_xyxyn = None
+        self.last_pose_name = "Unknown"
+        self.last_ai_conf = 0.0
+        self.last_debug_txt = ""
+
         self.on_fall_callback = on_fall_callback
         self.on_intruder_callback = on_intruder_callback
-        self._fall_callback_fired = False  # ป้องกันเรียก callback ซ้ำ
+        self._fall_callback_fired = False
         
-        # Audio playback initialization
         try:
             pygame.mixer.init()
         except Exception as e:
@@ -59,43 +99,97 @@ class FallDetector:
             
         self.last_alert_time = 0.0
         self.last_intruder_alert_time = 0.0
-        self.alert_cooldown = 10  # seconds between alerts
+        self.alert_cooldown = 10
         
-        # 🚀 OPTIMIZATION: Lazy load face service — ไม่โหลดจนกว่าจะเปิดโหมดผู้บุกรุก
         self.face_service = None
         self._face_service_loaded = False
         
-        # 🚀 OPTIMIZATION: Cache ผลลัพธ์ face recognition
         self.last_face_check_time = 0
         self.last_intruder_msg = ""
         self.last_intruder_color = (255, 255, 255)
         
-        # 🚀 OPTIMIZATION: Pre-calculate YOLO input size (320x192 for speed on CPU)
-        self._yolo_input_size = 320
+        # YOLO input size: 416 gives much better skeleton accuracy without losing speed
+        self._yolo_input_size = 416
+
+    def _get_state(self, camera_id):
+        if camera_id not in self._camera_states:
+            self._camera_states[camera_id] = _CameraState()
+        return self._camera_states[camera_id]
 
     def _get_face_service(self):
-        """Lazy load face recognition service — โหลดครั้งแรกที่ต้องใช้เท่านั้น"""
         if not self._face_service_loaded:
             self._face_service_loaded = True
             try:
                 from src.services.face_recognition_service import FaceRecognitionService
                 self.face_service = FaceRecognitionService()
-                print("✅ Face Recognition Service loaded successfully")
             except Exception as e:
-                print(f"⚠️ Could not load Face Recognition Service: {e}")
                 self.face_service = None
         return self.face_service
+
+    def _analyze_skeleton_geometry(self, kpts, bw, bh):
+        """Robust geometric analysis from detected keypoints.
+        
+        Works even if several keypoints are missing or occluded.
+        """
+        # Filter valid keypoints
+        valid = [(kpts[i][0], kpts[i][1], i) for i in range(17) if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
+        if len(valid) < 4:
+            # Fallback to bbox aspect ratio
+            ar = bw / bh if bh > 0 else 0
+            return {
+                'is_horizontal': ar > 1.25,
+                'aspect_ratio': ar,
+                'torso_angle': 90.0 if ar > 1.25 else 0.0,
+                'kpt_span_ratio': ar,
+                'valid_count': len(valid)
+            }
+        
+        xs = [p[0] for p in valid]
+        ys = [p[1] for p in valid]
+        x_span = max(xs) - min(xs)
+        y_span = max(ys) - min(ys)
+        kpt_span_ratio = (x_span / y_span) if y_span > 0.01 else 2.0
+        ar = bw / bh if bh > 0 else kpt_span_ratio
+
+        # Find any shoulder (5, 6) and any hip (11, 12)
+        shoulders = [kpts[i] for i in [5, 6] if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
+        hips = [kpts[i] for i in [11, 12] if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
+
+        torso_angle = None
+        if shoulders and hips:
+            s_x = np.mean([p[0] for p in shoulders])
+            s_y = np.mean([p[1] for p in shoulders])
+            h_x = np.mean([p[0] for p in hips])
+            h_y = np.mean([p[1] for p in hips])
+            dx = abs(s_x - h_x)
+            dy = abs(s_y - h_y)
+            torso_angle = np.degrees(np.arctan2(dx, dy)) if dy > 0.005 else 90.0
+        else:
+            torso_angle = 90.0 if (ar > 1.25 or kpt_span_ratio > 1.2) else 0.0
+
+        # Lying criteria:
+        # 1. Bounding box width > height (aspect_ratio > 1.25)
+        # 2. Keypoints span wider than tall (kpt_span_ratio > 1.2)
+        # 3. Torso angle > 45 degrees from vertical
+        is_horizontal = (ar > 1.25) or (kpt_span_ratio > 1.2) or (torso_angle is not None and torso_angle > 50)
+
+        return {
+            'is_horizontal': is_horizontal,
+            'aspect_ratio': ar,
+            'torso_angle': torso_angle,
+            'kpt_span_ratio': kpt_span_ratio,
+            'valid_count': len(valid)
+        }
 
     def async_play_alert(self, camera_name):
         current_time = time.time()
         if current_time - self.last_alert_time < self.alert_cooldown:
-            return  # Do not alert too often
+            return
             
         self.last_alert_time = current_time
         
         def _speak():
             text = f"แจ้งเตือน ตรวจพบการล้มที่ {camera_name}"
-            # Create a temporary file for the audio
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
             temp_filename = temp_file.name
             temp_file.close()
@@ -108,12 +202,8 @@ class FallDetector:
                 asyncio.run(_generate_audio())
                 pygame.mixer.music.load(temp_filename)
                 pygame.mixer.music.play()
-                
-                # Wait for playback to finish
                 while pygame.mixer.music.get_busy():
                     time.sleep(0.1)
-                    
-                # Clean up
                 pygame.mixer.music.unload()
                 try:
                     os.remove(temp_filename)
@@ -145,10 +235,8 @@ class FallDetector:
                 asyncio.run(_generate_audio())
                 pygame.mixer.music.load(temp_filename)
                 pygame.mixer.music.play()
-                
                 while pygame.mixer.music.get_busy():
                     time.sleep(0.1)
-                    
                 pygame.mixer.music.unload()
                 try:
                     os.remove(temp_filename)
@@ -159,15 +247,18 @@ class FallDetector:
                 
         threading.Thread(target=_speak, daemon=True).start()
 
-    def process_frame(self, frame, camera_name="Unknown"):
+    def process_frame(self, frame, camera_name="Unknown", camera_id=None):
+        """Process a frame for multi-person fall detection."""
+        if camera_id is None:
+            camera_id = camera_name
+        state = self._get_state(camera_id)
+
         if self.fall_model is None:
-            cv2.putText(frame, "Model Error", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            _draw_text_with_badge(frame, "Model Error", (20, 50), text_color=(0, 0, 255))
             return frame
 
-        # 🚀 เก็บภาพต้นฉบับไว้สำหรับ Face Recognition (ถ้าใช้ภาพที่มีเส้น Skeleton หน้าอาจจะจับไม่ติด)
         original_frame = frame.copy()
 
-        # 🚀 OPTIMIZATION: Resize ภาพให้เล็กลงก่อนเข้า YOLO (320x192 แทน 640x360)
         h, w = frame.shape[:2]
         scale = self._yolo_input_size / max(h, w)
         small_w = int(w * scale)
@@ -177,164 +268,159 @@ class FallDetector:
         results = self.pose_model(small_frame, verbose=False, conf=self.conf_threshold)
 
         if results[0].keypoints is not None and len(results[0].keypoints) > 0:
-             # Draw skeleton on the small frame then scale back
              annotated_small = results[0].plot()
              frame = cv2.resize(annotated_small, (w, h), interpolation=cv2.INTER_LINEAR)
-            
-             # Get keypoints (normalized so they work at any resolution)
-             kpts = results[0].keypoints.xyn[0].cpu().numpy()
-             row = kpts.flatten().tolist()
 
-             # Predict using RF model
-             prediction = self.fall_model.predict([row])[0]
-             prob = self.fall_model.predict_proba([row])[0]
-             ai_confidence = prob[prediction]
-             
-             pose_name = self.pose_labels.get(prediction, "Unknown")
-              
-             box = results[0].boxes.xywh[0].cpu().numpy()
-             bw, bh = box[2], box[3]
-             aspect_ratio = bw / bh if bh > 0 else 0
-             is_falling = False
-             debug_txt = f"AI: {pose_name} ({ai_confidence*100:.0f}%)"
+             num_persons = len(results[0].keypoints)
+             any_falling = False
+             persons_data = []
 
-             # Logic verification
-             if prediction == 4: 
-                # ถ้า AI มั่นใจมากๆ ว่าล้มให้แจ้งเตือนเลย (เพิ่มจาก >0.4 เป็น >0.65)
-                if ai_confidence > 0.65: 
-                    is_falling = True
-                # ถ้าความมั่นใจกลางๆ ให้พิจารณาสัดส่วนว่าแบนลงไปกับพื้นจริง (กว้างกว่าสูงเยอะๆ)
-                elif ai_confidence > 0.4 and aspect_ratio > 1.3:
-                    is_falling = True
-                    debug_txt += f" + Geo: Fall (AR={aspect_ratio:.1f})"
-                else:
-                    is_falling = False
-                    debug_txt += f" -> Ignored (Not flat enough, AR={aspect_ratio:.1f})"
-             else:
-                 # If aspect ratio is very high (> 2.0), it's likely a fall.
-                 # Also prevent false positives when face is too close to camera (box width almost full screen)
-                 is_close_up = (bw / small_w) > 0.85
-                 
-                 if aspect_ratio > 2.0 and not is_close_up:
+             for i in range(num_persons):
+                 kpts = results[0].keypoints.xyn[i].cpu().numpy()
+                 row = kpts.flatten().tolist()
+
+                 # Predict pose with RF
+                 prediction = self.fall_model.predict([row])[0]
+                 prob = self.fall_model.predict_proba([row])[0]
+                 ai_confidence = prob[prediction]
+                 pose_name = self.pose_labels.get(prediction, "Unknown")
+
+                 box = results[0].boxes.xywh[i].cpu().numpy()
+                 box_xyxyn = results[0].boxes.xyxyn[i].cpu().numpy()
+                 bw, bh = box[2], box[3]
+
+                 # Geometric analysis
+                 geo = self._analyze_skeleton_geometry(kpts, bw, bh)
+                 ar = geo['aspect_ratio']
+                 is_horizontal = geo['is_horizontal']
+
+                 # ═══ Robust Fall Decision Logic ═══
+                 is_falling = False
+
+                 if is_horizontal and ar > 1.25:
+                     # ร่างกายอยู่ในแนวราบ (กว้างกว่าสูง) -> ล้ม / นอนกับพื้น
                      is_falling = True
-                     debug_txt = f"Geo: Override {pose_name}->Fall ({aspect_ratio:.1f})"
-                 elif aspect_ratio > 1.5 and is_close_up:
+                     label_text = f"FALL DETECTED (Lying AR={ar:.1f})"
+                 elif prediction == 4 and ai_confidence > 0.5:
+                     # AI RF model มั่นใจว่าล้ม
+                     is_falling = True
+                     label_text = f"FALL DETECTED ({ai_confidence*100:.0f}%)"
+                 elif ar < 0.75:
+                     # สูงกว่ากว้างชัดเจน -> ยืน/เดิน
                      is_falling = False
-                     debug_txt = f"Geo: Ignored (Close Up {aspect_ratio:.1f})"
+                     label_text = f"Standing/Walking ({pose_name})"
+                 elif 0.75 <= ar <= 1.25:
+                     # ก้ำกึ่ง -> นั่ง
+                     is_falling = False
+                     label_text = f"Sitting ({pose_name})"
                  else:
                      is_falling = False
+                     label_text = f"{pose_name} ({ai_confidence*100:.0f}%)"
 
-             if is_falling:
-                 self.fall_counter += 1
+                 if is_falling:
+                     any_falling = True
+
+                 persons_data.append({
+                     'kpts_xyn': kpts,
+                     'box_xyxyn': box_xyxyn,
+                     'pose_name': "Fall" if is_falling else pose_name,
+                     'ai_conf': float(ai_confidence),
+                     'is_falling': is_falling,
+                     'label_text': label_text,
+                 })
+
+             # Update fall counter
+             if any_falling:
+                 state.fall_counter += 1
              else:
-                 self.fall_counter = 0
+                 state.fall_counter = max(0, state.fall_counter - 1)
 
-             if self.fall_counter >= self.fall_trigger_frames:
-                self.status = '!!! FALL DETECTED !!!'
-                self.color = (0, 0, 255) # Red
+             if state.fall_counter >= self.fall_trigger_frames:
+                state.status = '!!! FALL DETECTED !!!'
+                state.color = (0, 0, 255) # Red
                 self.async_play_alert(camera_name)
-                # Fire fall callback (once per fall event)
-                if self.on_fall_callback and not self._fall_callback_fired:
-                    self._fall_callback_fired = True
+                if self.on_fall_callback and not state._fall_callback_fired:
+                    state._fall_callback_fired = True
                     try:
                         self.on_fall_callback(camera_name, frame, time.time())
                     except Exception as e:
                         print(f"❌ Fall callback error: {e}")
              else:
-                 self.status = 'normal'
-                 self.color = (0, 255, 0) # Green
-                 self._fall_callback_fired = False  # Reset for next fall
+                 state.status = 'normal'
+                 state.color = (0, 255, 0) # Green
+                 state._fall_callback_fired = False
 
-             # Save AI state for smooth 30FPS overlay
-             self.last_kpts_xyn = results[0].keypoints.xyn[0].cpu().numpy()
-             self.last_box_xyxyn = results[0].boxes.xyxyn[0].cpu().numpy()
-             self.last_pose_name = pose_name
-             self.last_ai_conf = float(ai_confidence)
-             self.last_debug_txt = debug_txt
-             
-             # --- Intruder Detection (throttled) ---
-             intruder_mode = os.environ.get("INTRUDER_DETECTION") == "1"
-             intruder_status_txt = self.last_intruder_msg
-             intruder_color = self.last_intruder_color
-             
-             if intruder_mode:
-                 face_svc = self._get_face_service()
-                 if face_svc:
-                     current_time = time.time()
-                     # 🚀 OPTIMIZATION: สแกนใบหน้าทุก 2 วินาที (ลดภาระ CPU)
-                     if current_time - self.last_face_check_time > 2.0:
-                         is_intruder, msg = face_svc.detect_intruder(original_frame)
-                         self.last_intruder_msg = msg
-                         self.last_face_check_time = current_time
-                         intruder_status_txt = msg
-                         
-                         if is_intruder:
-                             self.last_intruder_color = (0, 0, 255)
-                             intruder_color = (0, 0, 255)
-                             self.async_play_intruder_alert(camera_name)
-                             if self.on_intruder_callback:
-                                 try:
-                                     self.on_intruder_callback(camera_name, original_frame, time.time())
-                                 except Exception as e:
-                                     print(f"❌ Intruder callback error: {e}")
-                         elif msg.startswith("Known"):
-                             self.last_intruder_color = (0, 255, 0)
-                             intruder_color = (0, 255, 0)
-                         else:
-                             self.last_intruder_color = (255, 255, 255)
-                             intruder_color = (255, 255, 255)
-            
-             cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-             cv2.putText(frame, f"Pose: {pose_name} ({ai_confidence*100:.0f}%)", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
-             cv2.putText(frame, f"Status: {self.status}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
-             cv2.putText(frame, f"Logic: {debug_txt}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-             cv2.putText(frame, f"Count: {self.fall_counter}/{self.fall_trigger_frames}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-             
-             if intruder_mode:
-                 cv2.putText(frame, f"Face: {intruder_status_txt}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, intruder_color, 2)
+             state.persons_data = persons_data
+
+             # Backward compat
+             self.fall_counter = state.fall_counter
+             self.status = state.status
+             self.color = state.color
+             self._fall_callback_fired = state._fall_callback_fired
+
+             # Draw clear person badges on frame
+             self._draw_overlay_elements(frame, state, camera_name)
+
         else:
+            state.status = "No Person"
+            state.persons_data = []
+            state.fall_counter = 0
+            state._fall_callback_fired = False
             self.status = "No Person"
-            self.last_kpts_xyn = None
-            self.last_box_xyxyn = None
-            self.last_pose_name = "Unknown"
-            self.last_debug_txt = ""
-            cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(frame, self.status, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            _draw_text_with_badge(frame, f"Cam: {camera_name} | No Person", (15, 30), font_scale=0.6, text_color=(0, 255, 255))
 
         return frame
 
-    def draw_overlay(self, frame, camera_name="Unknown"):
-        """Draw the last known status overlay without running AI inference."""
+    def _draw_overlay_elements(self, frame, state, camera_name):
+        """Draw clean, non-overlapping, high-contrast overlay on the frame."""
         h, w = frame.shape[:2]
         
-        # Draw bounding box and skeleton if available
-        if getattr(self, 'last_box_xyxyn', None) is not None:
-            box = self.last_box_xyxyn
+        # 1. Draw Bounding Boxes and Person Badges
+        for p_idx, person in enumerate(state.persons_data):
+            box = person['box_xyxyn']
             x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
             
-        if getattr(self, 'last_kpts_xyn', None) is not None:
-            for pt in self.last_kpts_xyn:
+            p_color = (0, 0, 255) if person['is_falling'] else (0, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), p_color, 2)
+
+            # Draw Person Tag above box
+            tag_text = f"P{p_idx+1}: {'FALL' if person['is_falling'] else person['pose_name']}"
+            tag_bg = (0, 0, 180) if person['is_falling'] else (0, 140, 0)
+            tag_y = max(y1 - 6, 20)
+            _draw_text_with_badge(frame, tag_text, (x1, tag_y), font_scale=0.55, text_color=(255, 255, 255), bg_color=tag_bg, thickness=2)
+
+        # 2. Draw Top Status Banner (at Y=30 to avoid card header)
+        status_bg = (0, 0, 180) if state.status.startswith('!') else (20, 20, 20)
+        status_text = f"Status: {state.status} | Persons: {len(state.persons_data)} | Trigger: {state.fall_counter}/{self.fall_trigger_frames}"
+        _draw_text_with_badge(frame, status_text, (15, 30), font_scale=0.55, text_color=state.color, bg_color=status_bg, thickness=2)
+
+    def draw_overlay(self, frame, camera_name="Unknown", camera_id=None):
+        """Draw cached overlay for fast 30FPS rendering without AI."""
+        if camera_id is None:
+            camera_id = camera_name
+        state = self._get_state(camera_id)
+        h, w = frame.shape[:2]
+
+        # Draw person boxes and skeleton dots
+        for p_idx, person in enumerate(state.persons_data):
+            box = person['box_xyxyn']
+            x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
+            p_color = (0, 0, 255) if person['is_falling'] else (0, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), p_color, 2)
+            
+            for pt in person['kpts_xyn']:
                 px, py = int(pt[0]*w), int(pt[1]*h)
                 if px > 0 and py > 0:
-                    cv2.circle(frame, (px, py), 4, (0, 255, 255), -1)
-                    
-        cv2.putText(frame, f"Cam: {camera_name}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
-        pose_name = getattr(self, 'last_pose_name', 'Unknown')
-        ai_conf = getattr(self, 'last_ai_conf', 0.0)
-        if pose_name != 'Unknown':
-            cv2.putText(frame, f"Pose: {pose_name} ({ai_conf*100:.0f}%)", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 2)
-            
-        cv2.putText(frame, f"Status: {self.status}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, self.color, 3)
-        
-        debug_txt = getattr(self, 'last_debug_txt', '')
-        if debug_txt:
-            cv2.putText(frame, f"Logic: {debug_txt}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            cv2.putText(frame, f"Count: {self.fall_counter}/{self.fall_trigger_frames}", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            
-        intruder_mode = os.environ.get("INTRUDER_DETECTION") == "1"
-        if intruder_mode and hasattr(self, 'last_intruder_msg') and self.last_intruder_msg:
-            cv2.putText(frame, f"Face: {self.last_intruder_msg}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, getattr(self, 'last_intruder_color', (255,255,255)), 2)
+                    cv2.circle(frame, (px, py), 3, (0, 255, 255), -1)
+
+            tag_text = f"P{p_idx+1}: {'FALL' if person['is_falling'] else person['pose_name']}"
+            tag_bg = (0, 0, 180) if person['is_falling'] else (0, 140, 0)
+            tag_y = max(y1 - 6, 20)
+            _draw_text_with_badge(frame, tag_text, (x1, tag_y), font_scale=0.55, text_color=(255, 255, 255), bg_color=tag_bg, thickness=2)
+
+        # Draw Status Banner
+        status_bg = (0, 0, 180) if state.status.startswith('!') else (20, 20, 20)
+        status_text = f"Status: {state.status} | Persons: {len(state.persons_data)} | Trigger: {state.fall_counter}/{self.fall_trigger_frames}"
+        _draw_text_with_badge(frame, status_text, (15, 30), font_scale=0.55, text_color=state.color, bg_color=status_bg, thickness=2)
 
         return frame
