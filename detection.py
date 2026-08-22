@@ -28,6 +28,7 @@ class _CameraState:
         self.is_checking_face = False
         self.unknown_person_start_time = 0
         self._intruder_callback_fired = False
+        self._no_fall_frames = 0  # consecutive frames with no fall (for slow decay)
 
 
 def _draw_text_with_badge(img, text, pos, font_scale=0.6, text_color=(255, 255, 255), bg_color=(0, 0, 0), thickness=2, padding=4):
@@ -50,7 +51,7 @@ def _draw_text_with_badge(img, text, pos, font_scale=0.6, text_color=(255, 255, 
 
 
 class FallDetector:
-    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.65, fall_trigger_frames=6, on_fall_callback=None, on_intruder_callback=None):
+    def __init__(self, yolo_path=None, rf_path=None, conf_threshold=0.45, fall_trigger_frames=4, on_fall_callback=None, on_intruder_callback=None):
         if yolo_path is None:
             yolo_path = os.path.join(_PROJECT_ROOT, "Tools", "yolov8n-pose.pt")
         if rf_path is None:
@@ -282,13 +283,19 @@ class FallDetector:
              any_falling = False
              persons_data = []
 
-             for i in range(num_persons):
-                 kpts = results[0].keypoints.xyn[i].cpu().numpy()
-                 row = kpts.flatten().tolist()
+             # ── Batch RF inference: predict ALL persons in one call ──────
+             all_kpts = [results[0].keypoints.xyn[i].cpu().numpy() for i in range(num_persons)]
+             all_rows = [kpts.flatten().tolist() for kpts in all_kpts]
+             all_predictions = self.fall_model.predict(all_rows)
+             all_probs = self.fall_model.predict_proba(all_rows)
 
-                 # Predict pose with RF
-                 prediction = self.fall_model.predict([row])[0]
-                 prob = self.fall_model.predict_proba([row])[0]
+             for i in range(num_persons):
+                 kpts = all_kpts[i]
+                 row = all_rows[i]
+
+                 # Pose result from batched RF call
+                 prediction = all_predictions[i]
+                 prob = all_probs[i]
                  ai_confidence = prob[prediction]
                  pose_name = self.pose_labels.get(prediction, "Unknown")
 
@@ -445,11 +452,17 @@ class FallDetector:
                  state.unknown_person_start_time = 0
                  state._intruder_callback_fired = False
 
-             # Update fall counter (decay slightly slower to prevent flickering when lying on floor)
+             # Update fall counter
+             # Decay slowly (every 2 consecutive no-fall frames) so brief occlusion
+             # by other people doesn't fight against legitimate fall accumulation.
              if any_falling:
                  state.fall_counter += 1
+                 state._no_fall_frames = 0
              else:
-                 state.fall_counter = max(0, state.fall_counter - 1)
+                 state._no_fall_frames += 1
+                 if state._no_fall_frames >= 2:  # only decay after 2 consecutive no-fall frames
+                     state.fall_counter = max(0, state.fall_counter - 1)
+                     state._no_fall_frames = 0
 
              if state.fall_counter >= self.fall_trigger_frames:
                 state.status = '!!! FALL DETECTED !!!'

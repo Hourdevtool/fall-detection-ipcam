@@ -404,13 +404,23 @@ class MainView:
         transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
         self.reg_image = ft.Image(
             src=f"data:image/gif;base64,{transparent_pixel}",
-            width=640,
-            height=480,
+            width=400,
+            height=280,
             fit="contain",
-            gapless_playback=True
+            gapless_playback=True,
+            border_radius=8
         ) # type: ignore
-        self.reg_name_input = ft.TextField(label="ชื่อสมาชิกครอบครัว", hint_text="ระบุชื่อ (ภาษาอังกฤษ/ไทย)")
-        self.reg_phone_input = ft.TextField(label="เบอร์โทรศัพท์", hint_text="เช่น 0812345678")
+        self.reg_name_input = ft.TextField(
+            label="ชื่อสมาชิกครอบครัว", 
+            hint_text="ระบุชื่อ (ภาษาอังกฤษ/ไทย)",
+            dense=True
+        )
+        self.reg_phone_input = ft.TextField(
+            label="เบอร์โทรศัพท์", 
+            hint_text="เช่น 0812345678",
+            dense=True,
+            expand=True
+        )
         self.reg_gender_dropdown = ft.Dropdown(
             label="เพศ",
             options=[
@@ -418,9 +428,10 @@ class MainView:
                 ft.dropdown.Option("หญิง"),
                 ft.dropdown.Option("อื่นๆ")
             ],
-            width=200
+            width=140,
+            dense=True
         )
-        self.reg_status_text = ft.Text("")
+        self.reg_status_text = ft.Text("", size=13, weight=ft.FontWeight.W_500)
         
         def on_capture(angle):
             name = self.reg_name_input.value.strip() if self.reg_name_input.value else ""
@@ -441,19 +452,35 @@ class MainView:
             close_callback()
 
         dialog = ft.AlertDialog(
-            title=ft.Text("ลงทะเบียนสมาชิกครอบครัว"),
-            content=ft.Column([
-                self.reg_name_input,
-                ft.Row([self.reg_phone_input, self.reg_gender_dropdown], alignment=ft.MainAxisAlignment.CENTER),
-                self.reg_image,
-                self.reg_status_text,
-                ft.Row([
-                    ft.ElevatedButton("ถ่ายภาพใบหน้า (Capture)", on_click=lambda e: on_capture("front"))
-                ], alignment=ft.MainAxisAlignment.CENTER)
-            ], tight=True, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            title=ft.Text("ลงทะเบียนสมาชิกครอบครัว", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                content=ft.Column([
+                    self.reg_name_input,
+                    ft.Row([self.reg_phone_input, self.reg_gender_dropdown], spacing=10),
+                    ft.Container(
+                        content=self.reg_image,
+                        alignment=ft.alignment.center,
+                        bgcolor="black26",
+                        border_radius=8,
+                        padding=4
+                    ),
+                    ft.Container(
+                        content=self.reg_status_text,
+                        alignment=ft.alignment.center
+                    ),
+                ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=420
+            ),
             actions=[
-                ft.TextButton("ปิด", on_click=on_close)
+                ft.TextButton("ปิด", on_click=on_close),
+                ft.ElevatedButton(
+                    "ถ่ายภาพใบหน้า (Capture)",
+                    icon=ft.Icons.CAMERA_ALT,
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE, color=ft.Colors.WHITE),
+                    on_click=lambda e: on_capture("front")
+                )
             ],
+            actions_alignment=ft.MainAxisAlignment.END,
             on_dismiss=on_close,
             modal=True
         )
