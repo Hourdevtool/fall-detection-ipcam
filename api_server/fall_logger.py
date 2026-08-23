@@ -38,6 +38,7 @@ def log_fall_event(camera_ip: str, camera_name: str, frame, detected_at: float |
 
     # Generate filename
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(detected_at))
+    display_time_str = time.strftime("%d/%m/%Y เวลา: %H:%M", time.localtime(detected_at))
     safe_ip = camera_ip.replace(".", "_")
     filename = f"{time_str}_{safe_ip}.jpg"
     filepath = os.path.join(os.path.abspath(SNAPSHOTS_DIR), filename)
@@ -66,7 +67,7 @@ def log_fall_event(camera_ip: str, camera_name: str, frame, detected_at: float |
         print(f"🗃️ Fall event logged: #{event['id']} — {camera_name} at {time_str}")
         
         # Send LINE Alert
-        send_line_alert(camera_name, time_str, filename)
+        send_line_alert(camera_name, display_time_str, filename)
     except Exception as e:
         print(f"❌ Error logging fall event: {e}")
 
@@ -129,6 +130,7 @@ def log_intruder_event(camera_ip: str, camera_name: str, frame, detected_at: flo
     ensure_snapshots_dir()
 
     time_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(detected_at))
+    display_time_str = time.strftime("%d/%m/%Y เวลา: %H:%M", time.localtime(detected_at))
     safe_ip = camera_ip.replace(".", "_")
     filename = f"intruder_{time_str}_{safe_ip}.jpg"
     filepath = os.path.join(os.path.abspath(SNAPSHOTS_DIR), filename)
@@ -142,7 +144,7 @@ def log_intruder_event(camera_ip: str, camera_name: str, frame, detected_at: flo
         filename = ""
 
     # Send LINE Alert for Intruder
-    send_intruder_line_alert(camera_name, time_str, filename)
+    send_intruder_line_alert(camera_name, display_time_str, filename)
 
 def send_intruder_line_alert(camera_name, time_str, filename=""):
     import json

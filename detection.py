@@ -415,7 +415,9 @@ class FallDetector:
                                      if self.on_intruder_callback and not c_state._intruder_callback_fired:
                                          c_state._intruder_callback_fired = True
                                          try:
-                                             self.on_intruder_callback(c_name, crop_img, time.time())
+                                             line_frame = crop_img.copy()
+                                             self._draw_overlay_elements(line_frame, c_state, c_name)
+                                             self.on_intruder_callback(c_name, line_frame, time.time())
                                          except Exception as e:
                                              print(f"❌ Intruder callback error: {e}")
                                  else:
@@ -435,7 +437,9 @@ class FallDetector:
                                              if self.on_intruder_callback and not c_state._intruder_callback_fired:
                                                  c_state._intruder_callback_fired = True
                                                  try:
-                                                     self.on_intruder_callback(c_name, crop_img, time.time())
+                                                     line_frame = crop_img.copy()
+                                                     self._draw_overlay_elements(line_frame, c_state, c_name)
+                                                     self.on_intruder_callback(c_name, line_frame, time.time())
                                                  except Exception as e:
                                                      print(f"❌ Intruder callback error: {e}")
                                          else:
@@ -464,6 +468,9 @@ class FallDetector:
                      state.fall_counter = max(0, state.fall_counter - 1)
                      state._no_fall_frames = 0
 
+             # Update state.persons_data first so it can be used for drawing clean LINE frames
+             state.persons_data = persons_data
+
              if state.fall_counter >= self.fall_trigger_frames:
                 state.status = '!!! FALL DETECTED !!!'
                 state.color = (0, 0, 255) # Red
@@ -471,15 +478,15 @@ class FallDetector:
                 if self.on_fall_callback and not state._fall_callback_fired:
                     state._fall_callback_fired = True
                     try:
-                        self.on_fall_callback(camera_name, frame, time.time())
+                        line_frame = original_frame.copy()
+                        self._draw_overlay_elements(line_frame, state, camera_name)
+                        self.on_fall_callback(camera_name, line_frame, time.time())
                     except Exception as e:
                         print(f"❌ Fall callback error: {e}")
              else:
                  state.status = 'Normal'
                  state.color = (0, 255, 0) # Green
                  state._fall_callback_fired = False
-
-             state.persons_data = persons_data
 
              # Backward compat
              self.fall_counter = state.fall_counter
