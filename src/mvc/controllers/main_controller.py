@@ -20,6 +20,7 @@ class MainController:
         
         self.view.register_button.on_click = self.on_register_click
         self.view.intruder_toggle.on_change = self.on_intruder_toggle
+        self.view.on_rename_camera = self.handle_rename_camera
         
         self.webcam_running = False
         self.webcam_cap = None
@@ -62,6 +63,12 @@ class MainController:
             # Hide the icon button since the banner is now visible
             self.view.show_code_button.visible = False
             self.view.page.update()
+
+    def handle_rename_camera(self, ip, current_name):
+        def save_callback(ip_addr, name):
+            self.camera_manager.save_camera_name(ip_addr, ip_addr, name) # Use IP as serial number for simplicity if not known
+            
+        self.view.show_naming_dialog(ip, None, save_callback, None)
 
     def on_camera_found(self, ip, rtsp_url, needs_naming, temp_path, serial_number):
         if needs_naming:

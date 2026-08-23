@@ -103,9 +103,10 @@ class MainView:
             ], expand=True)
         )
 
-        # Dictionary to store Image controls per IP
         self.camera_images = {}
         self.camera_overlays = {}
+        self.camera_labels = {}
+        self.on_rename_camera = None
 
     def show_pairing_code(self, code):
         self.pair_code_text.value = f" {code} "
@@ -127,9 +128,12 @@ class MainView:
                 del self.camera_images[k]
                 if k in self.camera_overlays:
                     del self.camera_overlays[k]
+                if k in self.camera_labels:
+                    del self.camera_labels[k]
             self.camera_grid.controls.clear()
             self.camera_images.clear()
             self.camera_overlays.clear()
+            self.camera_labels.clear()
             needs_page_update = True
 
         # Only iterate over actual IP addresses
@@ -158,12 +162,20 @@ class MainView:
                     visible=not is_active or not b64
                 )
                 
+                label_text = ft.Text(f"{cam_name} ({ip})", color="white", size=12, weight=ft.FontWeight.BOLD)
+                
+                def make_edit_click(ip_addr, curr_name):
+                    return lambda e: self.on_rename_camera(ip_addr, curr_name) if self.on_rename_camera else None
+                
                 card = ft.Container(
                     content=ft.Stack([
                         img,
                         offline_overlay,
                         ft.Container(
-                            content=ft.Text(f"{cam_name} ({ip})", color="white", size=12, weight=ft.FontWeight.BOLD),
+                            content=ft.Row([
+                                label_text,
+                                ft.IconButton(icon=ft.Icons.EDIT, icon_size=14, icon_color="white", on_click=make_edit_click(ip, cam_name))
+                            ], alignment=ft.MainAxisAlignment.START, spacing=5),
                             bgcolor="#80000000",
                             padding=5,
                             border_radius=5,
@@ -176,6 +188,7 @@ class MainView:
                 )
                 self.camera_images[ip] = img
                 self.camera_overlays[ip] = offline_overlay
+                self.camera_labels[ip] = label_text
                 self.camera_grid.controls.append(card)
                 needs_page_update = True
                 
@@ -196,6 +209,13 @@ class MainView:
                 if self.camera_overlays[ip].visible != show_offline:
                     self.camera_overlays[ip].visible = show_offline
                     needs_page_update = True
+                
+                # Update camera name if changed
+                if ip in self.camera_labels:
+                    new_label = f"{cam_name} ({ip})"
+                    if self.camera_labels[ip].value != new_label:
+                        self.camera_labels[ip].value = new_label
+                        needs_page_update = True
 
         if needs_page_update:
             self.page.update()
