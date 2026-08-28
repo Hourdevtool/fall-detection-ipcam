@@ -60,30 +60,16 @@ def _get_shared_detector(on_fall_callback=None, on_intruder_callback=None):
     return _shared_detector
 
 
-# Low-latency PyAV connection options (AUTO first for widest compatibility)
+# PyAV connection options — AUTO first (กล้องส่วนใหญ่ค้างถ้าบังคับ TCP/UDP)
 _AV_OPTIONS_LIST = [
-    {
-        'stimeout': '5000000',
-        'fflags': 'nobuffer',
-        'flags': 'low_delay',
-    },
-    {
-        'rtsp_transport': 'tcp',
-        'stimeout': '5000000',
-        'fflags': 'nobuffer',
-        'flags': 'low_delay',
-    },
-    {
-        'rtsp_transport': 'udp',
-        'stimeout': '5000000',
-        'fflags': 'nobuffer',
-        'flags': 'low_delay',
-    },
+    {'stimeout': '2000000'},                                  # Auto (เร็วที่สุด)
+    {'rtsp_transport': 'tcp', 'stimeout': '2000000'},         # TCP fallback
+    {'rtsp_transport': 'udp', 'stimeout': '2000000'},         # UDP fallback
 ]
 
 
 def _open_stream(ip, rtsp_url):
-    """Try to open RTSP stream with multiple transport options and fallback URLs."""
+    """Try to open RTSP stream — ลอง URL จาก ONVIF ก่อน แล้วค่อยลอง fallback."""
     import re
     user = "admin"
     password = ""
@@ -96,28 +82,27 @@ def _open_stream(ip, rtsp_url):
         ip = m.group(3)
         port = m.group(4) or "554"
 
+    # ลอง URL จาก ONVIF ก่อน (เป็น URL ที่ถูกต้องที่สุด) แล้วค่อยลอง fallback
     candidate_urls = [
         rtsp_url,
+        f"rtsp://{user}:{password}@{ip}:{port}/onvif1",
+        f"rtsp://{user}:{password}@{ip}:{port}/onvif2",
+        f"rtsp://{ip}:{port}/onvif1",
         f"rtsp://{user}:{password}@{ip}:{port}/user={user}&password={password}&channel=1&stream=0.sdp",
         f"rtsp://{user}:{password}@{ip}:{port}/user={user}&password={password}&channel=1&stream=1.sdp",
-        f"rtsp://{user}:{password}@{ip}:{port}/onvif2",
         f"rtsp://{user}:{password}@{ip}:{port}/live/ch0",
     ]
 
-    for candidate in candidate_urls:
+    # Remove duplicates
+    seen = set()
+    unique = [u for u in candidate_urls if u and u not in seen and not seen.add(u)]
+
+    for candidate in unique:
         for opts in _AV_OPTIONS_LIST:
             proto = opts.get('rtsp_transport', 'auto').upper()
             try:
                 container = av.open(candidate, 'r', options=opts)
-                for stream in container.streams.video:
-                    stream.thread_type = 'AUTO'
-
-                test_frame = None
-                for f in container.decode(video=0):
-                    test_frame = f
-                    break
-
-                if test_frame is not None:
+                if container.streams.video:
                     print(f"✅ [สตรีม] IP: {ip} เชื่อมต่อสำเร็จด้วย {proto} ({candidate})")
                     return container, proto
                 else:
@@ -125,6 +110,7 @@ def _open_stream(ip, rtsp_url):
             except Exception:
                 pass
 
+    print(f"❌ [สตรีม] IP: {ip} ไม่สามารถเชื่อมต่อ RTSP ได้")
     return None, None
 
 
@@ -222,15 +208,32 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
 
     # ─── Reader thread (grabs fresh frames directly from RTSP) ───────────
     def read_frames():
+        consecutive_errors = 0
         try:
-            for frame in container.decode(video=0):
+            if not container.streams.video:
+                stream_died[0] = True
+                return
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            for packet in container.demux(stream):
                 if not running[0] or not active_cameras.get(ip, False):
                     break
-                latest_frame[0] = frame.to_ndarray(format="bgr24")
-                last_frame_time[0] = time.time()
+                if packet.dts is None:
+                    continue
+                try:
+                    for frame in packet.decode():
+                        latest_frame[0] = frame.to_ndarray(format="bgr24")
+                        last_frame_time[0] = time.time()
+                        consecutive_errors = 0
+                except Exception:
+                    consecutive_errors += 1
+                    if consecutive_errors > 100:
+                        stream_died[0] = True
+                        break
         except av.error.EOFError:
             stream_died[0] = True
         except Exception as e:
+            print(f"⚠️ [สตรีม {ip}] RTSP stream ended: {e}")
             stream_died[0] = True
         finally:
             running[0] = False
