@@ -306,30 +306,46 @@ class NetworkScanner:
                     import tempfile
                     print(f"📸 [IP: {ip}] กำลังดึงภาพตัวอย่างจากสตรีม...")
 
-                    # ลอง 3 วิธีตามลำดับ: plain → TCP → UDP พร้อม Timeout 5 วินาที
                     av_options_list = [
-                        {'stimeout': '2000000'},
+                        {'stimeout': '2000000'},                               # Auto (เร็วที่สุด)
                         {'rtsp_transport': 'tcp', 'stimeout': '2000000'},
                         {'rtsp_transport': 'udp', 'stimeout': '2000000'},
                     ]
                     # Candidate URLs
                     candidates = [
                         rtsp_url,
+                        f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
+                        f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
+                        f"rtsp://{ip}:554/onvif1",
                         f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=1.sdp",
                         f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
+                        f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
                     ]
                     for candidate in candidates:
                         for av_opts in av_options_list:
                             try:
                                 container = av.open(candidate, mode='r', options=av_opts or None)
-                                for frame in container.decode(video=0):
-                                    img = frame.to_ndarray(format='bgr24')
-                                    fd, temp_path = tempfile.mkstemp(suffix=".jpg")
-                                    os.close(fd)
-                                    cv2.imwrite(temp_path, img)
-                                    proto = av_opts.get('rtsp_transport', 'plain').upper()
-                                    print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
-                                    break
+                                if not container.streams.video:
+                                    container.close()
+                                    continue
+                                stream = container.streams.video[0]
+                                stream.thread_type = 'AUTO'
+                                for packet in container.demux(stream):
+                                    if packet.dts is None:
+                                        continue
+                                    try:
+                                        for frame in packet.decode():
+                                            img = frame.to_ndarray(format='bgr24')
+                                            fd, temp_path = tempfile.mkstemp(suffix=".jpg")
+                                            os.close(fd)
+                                            cv2.imwrite(temp_path, img)
+                                            proto = av_opts.get('rtsp_transport', 'plain').upper()
+                                            print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
+                                            break
+                                    except Exception:
+                                        pass
+                                    if temp_path:
+                                        break
                                 container.close()
                                 if temp_path:
                                     break
@@ -349,6 +365,47 @@ class NetworkScanner:
                 err_msg = str(e).split('\n')[0][:120]
                 print(f"❌ [IP: {ip}] พอร์ต {try_port}: {type(e).__name__}: {err_msg}")
                 continue
+
+        # Fallback: ถ้า ONVIF SOAP ล้มเหลวทุกพอร์ต แต่พอร์ต 554 เปิดอยู่ ให้ลองดึง RTSP ตรงๆ
+        if self.check_port(ip, 554):
+            print(f"📡 [IP: {ip}] ลองเชื่อมต่อแบบ RTSP Direct Fallback...")
+            rtsp_candidates = [
+                f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
+                f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
+                f"rtsp://{ip}:554/onvif1",
+                f"rtsp://{ip}:554/onvif2",
+                f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
+                f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
+            ]
+            for candidate in rtsp_candidates:
+                try:
+                    import av
+                    container = av.open(candidate, mode='r', options={'stimeout': '2000000'})
+                    if container.streams.video:
+                        container.close()
+                        rtsp_url = candidate
+                        mac = get_mac_address(ip) or ip
+                        serial_number = mac
+
+                        # Check if camera needs naming
+                        import json
+                        import os
+                        needs_naming = True
+                        if os.path.exists("config/cameras.json"):
+                            try:
+                                with open("config/cameras.json", "r", encoding="utf-8") as f:
+                                    config = json.load(f)
+                                    if serial_number in config or ip in config:
+                                        needs_naming = False
+                            except Exception:
+                                pass
+
+                        print(f"📷 [IP: {ip}] พบกล้องผ่าน RTSP Direct (URL: {rtsp_url})")
+                        if self.on_camera_found:
+                            self.on_camera_found(ip, rtsp_url, needs_naming, None, serial_number)
+                        return
+                except Exception:
+                    pass
 
     def _queue_reader_loop(self):
         """Thread ที่คอยอ่านผลจาก scanner process → เรียก get_onvif() บน main process
