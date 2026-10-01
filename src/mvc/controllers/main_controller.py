@@ -159,34 +159,114 @@ class MainController:
             self.stop_webcam
         )
 
-    def start_webcam(self, image_control):
+    def start_webcam(self, image_control, status_control=None):
         import cv2
         import base64
+        import numpy as np
+
         self.webcam_running = True
-        self.webcam_cap = cv2.VideoCapture(0)
-        
-        async def update_webcam():
-            while self.webcam_running and self.webcam_cap and self.webcam_cap.isOpened():
-                ret, frame = await asyncio.to_thread(self.webcam_cap.read)
-                if ret and self.webcam_running:
-                    # Save frame for capture
-                    self.current_webcam_frame = frame
-                    _, buffer = await asyncio.to_thread(
-                        cv2.imencode, '.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
-                    )
-                    b64_str = base64.b64encode(buffer).decode('utf-8')
-                    if image_control.src != f"data:image/jpeg;base64,{b64_str}":
-                        image_control.src = f"data:image/jpeg;base64,{b64_str}"
-                        image_control.update()
-                await asyncio.sleep(0.033)
-                
-        self.page.run_task(update_webcam)
+        self.current_webcam_frame = None
+        self.webcam_cap = None
+
+        # 1. พยายามเปิด Local Webcam (ลอง index 0 และ 1)
+        for cam_idx in (0, 1):
+            try:
+                cap = cv2.VideoCapture(cam_idx)
+                if cap is not None and cap.isOpened():
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None:
+                        self.webcam_cap = cap
+                        self.current_webcam_frame = test_frame
+                        break
+                if cap is not None:
+                    cap.release()
+            except Exception:
+                pass
+
+        if self.webcam_cap and self.webcam_cap.isOpened():
+            if status_control:
+                status_control.value = "กรุณามองตรงไปที่กล้อง (Webcam)"
+                status_control.color = "white70"
+                try:
+                    status_control.update()
+                except Exception:
+                    pass
+
+            async def update_webcam():
+                while self.webcam_running and self.webcam_cap and self.webcam_cap.isOpened():
+                    ret, frame = await asyncio.to_thread(self.webcam_cap.read)
+                    if ret and self.webcam_running:
+                        self.current_webcam_frame = frame
+                        _, buffer = await asyncio.to_thread(
+                            cv2.imencode, '.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                        )
+                        b64_str = base64.b64encode(buffer).decode('utf-8')
+                        if image_control.src != f"data:image/jpeg;base64,{b64_str}":
+                            image_control.src = f"data:image/jpeg;base64,{b64_str}"
+                            try:
+                                image_control.update()
+                            except Exception:
+                                pass
+                    await asyncio.sleep(0.033)
+
+            self.page.run_task(update_webcam)
+            return
+
+        # 2. กรณีไม่พบ Webcam ในเครื่อง: ตรวจสอบกล้อง IP Camera ที่กำลังทำงานอยู่
+        active_ips = [
+            ip for ip, act in self.camera_manager.active_cameras.items()
+            if act and (ip in self.camera_manager.frame_buffer or ip in self.camera_manager.frame_buffer_b64)
+        ]
+
+        if active_ips:
+            ip = active_ips[0]
+            cam_name = self.camera_manager.camera_names.get(ip, ip)
+            if status_control:
+                status_control.value = f"📷 ไม่พบเว็บแคม สลับใช้กล้อง IP: {cam_name}"
+                status_control.color = "amber"
+                try:
+                    status_control.update()
+                except Exception:
+                    pass
+
+            async def update_ipcam():
+                while self.webcam_running:
+                    raw_bytes = self.camera_manager.frame_buffer.get(ip)
+                    if raw_bytes and self.webcam_running:
+                        np_arr = np.frombuffer(raw_bytes, np.uint8)
+                        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            self.current_webcam_frame = frame
+
+                        b64 = self.camera_manager.frame_buffer_b64.get(ip)
+                        if b64 and image_control.src != f"data:image/jpeg;base64,{b64}":
+                            image_control.src = f"data:image/jpeg;base64,{b64}"
+                            try:
+                                image_control.update()
+                            except Exception:
+                                pass
+                    await asyncio.sleep(0.05)
+
+            self.page.run_task(update_ipcam)
+            return
+
+        # 3. ไม่พบกล้องใดๆ เลย (ไม่มีทั้ง Webcam และ IP Camera)
+        if status_control:
+            status_control.value = "⚠️ ไม่พบกล้องในระบบ (ไม่มีเว็บแคมและยังไม่พบกล้อง IP)"
+            status_control.color = "red"
+            try:
+                status_control.update()
+            except Exception:
+                pass
 
     def capture_face(self, name, angle, status_text_control, phone="", gender=""):
         if not hasattr(self, 'current_webcam_frame') or self.current_webcam_frame is None:
-            status_text_control.value = "ไม่พบภาพจากกล้อง"
+            status_text_control.value = "⚠️ ไม่พบกล้องหรือไม่มีสัญญาณภาพ ไม่สามารถบันทึกได้"
             status_text_control.color = "red"
-            status_text_control.update()
+            try:
+                status_text_control.update()
+            except Exception:
+                pass
             return
             
         import cv2
@@ -229,5 +309,9 @@ class MainController:
     def stop_webcam(self):
         self.webcam_running = False
         if self.webcam_cap:
-            self.webcam_cap.release()
+            try:
+                self.webcam_cap.release()
+            except Exception:
+                pass
             self.webcam_cap = None
+        self.current_webcam_frame = None

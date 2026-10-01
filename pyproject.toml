@@ -9,7 +9,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "edge-tts>=7.2.8",
     "fastapi>=0.136.3",
-    "flet>=0.85.1",
+    "flet==0.85.1",
     "google-auth>=2.53.0",
     "joblib>=1.5.3",
     "line-bot-sdk>=3.23.1",
@@ -27,6 +27,8 @@ dependencies = [
     "wsdiscovery>=2.1.2",
     "deepface>=0.0.100",
     "tf-keras>=2.21.0",
+    "flet-desktop==0.85.1",
+    "certifi>=2026.5.20",
 ]
 
 [tool.pyright]

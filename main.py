@@ -1,7 +1,17 @@
+import os
+import ssl
+
+# ป้องกันปัญหา SSL Certificate verification บน Windows
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    pass
+
 import flet as ft
 import threading
 import uvicorn
-import os
 
 from src.mvc.controllers.main_controller import MainController
 

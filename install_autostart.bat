@@ -1,0 +1,25 @@
+@echo off
+title Install Fall Guard Autostart
+cd /d "%~dp0"
+
+echo ===================================================
+echo   Setup Fall Guard Autostart on Windows Boot
+echo ===================================================
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$WshShell = New-Object -ComObject WScript.Shell; " ^
+    "$StartupFolder = [Environment]::GetFolderPath('Startup'); " ^
+    "$Shortcut = $WshShell.CreateShortcut(\"$StartupFolder\FallGuard.lnk\"); " ^
+    "$Shortcut.TargetPath = '%~dp0start_app.bat'; " ^
+    "$Shortcut.WorkingDirectory = '%~dp0'; " ^
+    "$Shortcut.Description = 'Fall Guard Fall Detection System'; " ^
+    "$Shortcut.WindowStyle = 7; " ^
+    "$Shortcut.Save(); " ^
+    "Write-Host '[SUCCESS] Created Startup shortcut successfully!' -ForegroundColor Green"
+
+echo.
+echo ===================================================
+echo เรียบร้อย! ระบบจะเปิดทำงานอัตโนมัติเมื่อเปิดเครื่อง (เข้าสู่ Windows)
+echo หากต้องการยกเลิก สามารถดับเบิลคลิกไฟล์ 'uninstall_autostart.bat'
+echo ===================================================
+pause

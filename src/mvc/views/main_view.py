@@ -56,13 +56,16 @@ class MainView:
         )
         
         # A status message when no cameras are found yet
-        self.status_text = ft.Text("Radar Scanning...", size=24, color="white54")
+        self.no_camera_view = ft.Column([
+            ft.ProgressRing(width=44, height=44, stroke_width=3, color="blue400"),
+            ft.Text("กำลังค้นหากล้องในวงแลน (Radar Scanning)...", size=20, weight=ft.FontWeight.BOLD, color="white70"),
+            ft.Text("ยังไม่พบกล้อง IP Camera ในเครือข่าย กรุณาตรวจสอบว่ากล้องเปิดอยู่และเชื่อมต่อ WiFi/LAN เดียวกัน", size=13, color="white38"),
+        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15)
         
         # Container for the grid vs status
         self.content_container = ft.Container(
-            content=self.status_text,
+            content=self.no_camera_view,
             alignment=ft.Alignment(0, 0), # center
-
             expand=True
         )
 
@@ -141,6 +144,18 @@ class MainView:
         valid_names = {ip for ip in camera_names.keys() if is_valid_ip(ip)}
         all_ips = valid_active | valid_names
 
+        # Toggle view between no-camera indicator and camera grid
+        if len(all_ips) == 0:
+            if self.content_container.content != self.no_camera_view:
+                self.content_container.content = self.no_camera_view
+                self.content_container.alignment = ft.Alignment(0, 0)
+                needs_page_update = True
+        else:
+            if self.content_container.content != self.camera_grid:
+                self.content_container.content = self.camera_grid
+                self.content_container.alignment = None
+                needs_page_update = True
+
         for ip in all_ips:
             b64 = base64_frames.get(ip)
             is_active = active_cameras.get(ip, False)
@@ -191,11 +206,6 @@ class MainView:
                 self.camera_labels[ip] = label_text
                 self.camera_grid.controls.append(card)
                 needs_page_update = True
-                
-                # Switch content container from text to grid if this is the first camera
-                if self.content_container.content != self.camera_grid:
-                    self.content_container.content = self.camera_grid
-                    self.content_container.alignment = None
             else:
                 # Update existing image and visibility of overlay
                 if b64:
@@ -479,14 +489,14 @@ class MainView:
                     ft.Row([self.reg_phone_input, self.reg_gender_dropdown], spacing=10),
                     ft.Container(
                         content=self.reg_image,
-                        alignment=ft.alignment.center,
+                        alignment=ft.Alignment(0, 0),
                         bgcolor="black26",
                         border_radius=8,
                         padding=4
                     ),
                     ft.Container(
                         content=self.reg_status_text,
-                        alignment=ft.alignment.center
+                        alignment=ft.Alignment(0, 0)
                     ),
                 ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO),
                 width=420
@@ -505,4 +515,4 @@ class MainView:
             modal=True
         )
         self.page.show_dialog(dialog)
-        start_webcam_callback(self.reg_image)
+        start_webcam_callback(self.reg_image, self.reg_status_text)
