@@ -3,11 +3,11 @@ title Fall Guard System
 cd /d "%~dp0"
 
 echo ===================================================
-echo   Fall Guard - Fall Detection & IPCam System
+echo   Fall Guard - Fall Detection ^& IPCam System
 echo ===================================================
 echo [1/2] Checking Python environment...
 if not exist ".venv\Scripts\python.exe" (
-    echo [ERROR] Virtual environment not found (.venv\Scripts\python.exe)!
+    echo [ERROR] Virtual environment not found: .venv\Scripts\python.exe
     echo Please make sure the virtual environment exists.
     pause
     exit /b 1

@@ -9,11 +9,12 @@ echo ===================================================
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$WshShell = New-Object -ComObject WScript.Shell; " ^
     "$StartupFolder = [Environment]::GetFolderPath('Startup'); " ^
-    "$Shortcut = $WshShell.CreateShortcut(\"$StartupFolder\FallGuard.lnk\"); " ^
-    "$Shortcut.TargetPath = '%~dp0start_app.bat'; " ^
+    "$ShortcutPath = Join-Path $StartupFolder 'FallGuard.lnk'; " ^
+    "$Shortcut = $WshShell.CreateShortcut($ShortcutPath); " ^
+    "$Shortcut.TargetPath = (Join-Path '%~dp0' 'start_app.bat'); " ^
     "$Shortcut.WorkingDirectory = '%~dp0'; " ^
     "$Shortcut.Description = 'Fall Guard Fall Detection System'; " ^
-    "$Shortcut.WindowStyle = 7; " ^
+    "$Shortcut.WindowStyle = 1; " ^
     "$Shortcut.Save(); " ^
     "Write-Host '[SUCCESS] Created Startup shortcut successfully!' -ForegroundColor Green"
 
