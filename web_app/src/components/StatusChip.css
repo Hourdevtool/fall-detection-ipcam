@@ -2,20 +2,25 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: var(--radius-full);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
 .status-normal {
-  background: rgba(0, 212, 170, 0.1);
-  color: var(--teal);
+  background: var(--teal-glow);
+  color: var(--teal-text);
+}
+
+.status-standby {
+  background: var(--bg-elevated);
+  color: var(--text-2);
 }
 
 .status-danger {
-  background: rgba(255, 71, 87, 0.12);
-  color: var(--danger);
+  background: var(--danger-glow);
+  color: var(--danger-text);
   animation: glow-danger 2s ease-in-out infinite;
 }
 
@@ -23,18 +28,10 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-}
-
-.status-normal .status-chip-dot {
-  background: var(--teal);
-}
-
-.status-danger .status-chip-dot {
-  background: var(--danger);
-  animation: pulse 1s ease-in-out infinite;
+  background: var(--text-3);
 }
 
 @keyframes glow-danger {
   0%, 100% { box-shadow: none; }
-  50% { box-shadow: 0 0 12px var(--danger-glow); }
+  50% { box-shadow: 0 0 0 3px var(--danger-glow); }
 }

@@ -66,14 +66,19 @@ def log_fall_event(camera_ip: str, camera_name: str, frame, detected_at: float |
         )
         print(f"🗃️ Fall event logged: #{event['id']} — {camera_name} at {time_str}")
         
-        # Send LINE Alert
-        send_line_alert(camera_name, display_time_str, filename)
+        # Send LINE Alert asynchronously so network latency never stalls AI detection
+        threading.Thread(
+            target=send_line_alert,
+            args=(camera_name, display_time_str, filename),
+            daemon=True,
+        ).start()
     except Exception as e:
         print(f"❌ Error logging fall event: {e}")
 
-def send_line_alert(camera_name, time_str, filename=""):
+
+def _send_line_push(message_text: str, filename: str = ""):
+    """Send a LINE push message with optional snapshot image."""
     import json
-    import os
     from linebot import LineBotApi
     from linebot.models import TextSendMessage, ImageSendMessage
     from linebot.exceptions import LineBotApiError
@@ -90,10 +95,10 @@ def send_line_alert(camera_name, time_str, filename=""):
     if not bot_token or not group_id:
         return
 
-    line_bot_api = LineBotApi(bot_token)
+    line_bot_api = LineBotApi(bot_token, timeout=5.0)
     try:
-        messages = [TextSendMessage(text=f"🚨 แจ้งเตือนการล้ม!\nกล้อง: {camera_name}\nเวลา: {time_str}")]
-        
+        messages = [TextSendMessage(text=message_text)]
+
         # ถ้าระบบมีภาพ และหา Cloudflare URL เจอ ให้แนบภาพไปด้วย
         if filename:
             cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "cloudflare_url.txt")
@@ -110,6 +115,10 @@ def send_line_alert(camera_name, time_str, filename=""):
         print(f"❌ LineBotApiError: {e}")
     except Exception as e:
         print(f"❌ Error sending LINE alert: {e}")
+
+
+def send_line_alert(camera_name, time_str, filename=""):
+    _send_line_push(f"🚨 แจ้งเตือนการล้ม!\nกล้อง: {camera_name}\nเวลา: {time_str}", filename)
 
 # Cooldown to prevent duplicate intruder events
 _last_intruder_log_time: dict[str, float] = {}
@@ -140,42 +149,15 @@ def log_intruder_event(camera_ip: str, camera_name: str, frame, detected_at: flo
             cv2.imwrite(filepath, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         else:
             filename = ""
-    except Exception as e:
+    except Exception:
         filename = ""
 
-    # Send LINE Alert for Intruder
-    send_intruder_line_alert(camera_name, display_time_str, filename)
+    # Send LINE Alert for Intruder asynchronously
+    threading.Thread(
+        target=send_intruder_line_alert,
+        args=(camera_name, display_time_str, filename),
+        daemon=True,
+    ).start()
 
 def send_intruder_line_alert(camera_name, time_str, filename=""):
-    import json
-    import os
-    from linebot import LineBotApi
-    from linebot.models import TextSendMessage, ImageSendMessage
-    
-    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.json")
-    try:
-        with open(config_file, "r", encoding="utf-8") as f:
-            config = json.load(f)
-            bot_token = config.get("line_bot_token", "").strip()
-            group_id = config.get("line_group_id", "").strip()
-    except Exception:
-        return
-
-    if not bot_token or not group_id:
-        return
-
-    line_bot_api = LineBotApi(bot_token)
-    try:
-        messages = [TextSendMessage(text=f"🚨 แจ้งเตือนพบผู้บุกรุก!\nกล้อง: {camera_name}\nเวลา: {time_str}")]
-        if filename:
-            cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "cloudflare_url.txt")
-            if os.path.exists(cf_file):
-                with open(cf_file, "r", encoding="utf-8") as f:
-                    cf_url = f.read().strip()
-                if cf_url.startswith("https"):
-                    image_url = f"{cf_url}/api/snapshots/{filename}"
-                    messages.append(ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
-
-        line_bot_api.push_message(group_id, messages)
-    except Exception as e:
-        print(f"❌ Error sending intruder LINE alert: {e}")
+    _send_line_push(f"🚨 แจ้งเตือนพบผู้บุกรุก!\nกล้อง: {camera_name}\nเวลา: {time_str}", filename)

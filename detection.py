@@ -8,9 +8,18 @@ import asyncio
 import edge_tts
 import pygame
 import os
+import sys
 import tempfile
 
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from src.services.pose_features import (  # noqa: E402
+    POSE_FEATURE_DIM,
+    extract_pose_features,
+    safe_torso_angle_and_dy,
+)
 
 
 class _CameraState:
@@ -74,13 +83,27 @@ class FallDetector:
         print(f"Loading YOLO model from {yolo_path}...")
         self.pose_model = YOLO(self.yolo_path)
         
-        print(f"Loading Random Forest model from {rf_path}...")
+        print(f"Loading Pose Classification model from {rf_path}...")
         try:
              self.fall_model = joblib.load(self.rf_path)
+             if hasattr(self.fall_model, "n_jobs"):
+                 # Single-threaded predict avoids joblib IPC overhead (~70ms -> ~6-12ms)
+                 self.fall_model.n_jobs = 1
         except Exception as e:
-             print(f"❌ Could not load RF model from {self.rf_path}. Error: {e}")
+             print(f"❌ Could not load pose model from {self.rf_path}. Error: {e}")
              self.fall_model = None
 
+        self._use_pose_features = bool(
+            self.fall_model is not None
+            and getattr(self.fall_model, "n_features_in_", 34) == POSE_FEATURE_DIM
+        )
+        self._model_classes = (
+            np.asarray(self.fall_model.classes_)
+            if self.fall_model is not None and hasattr(self.fall_model, "classes_")
+            else np.array([0, 1, 2, 3, 4])
+        )
+        self._infer_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._camera_states = {}
 
         self.fall_counter = 0
@@ -116,9 +139,10 @@ class FallDetector:
         self._yolo_input_size = 640
 
     def _get_state(self, camera_id):
-        if camera_id not in self._camera_states:
-            self._camera_states[camera_id] = _CameraState()
-        return self._camera_states[camera_id]
+        with self._state_lock:
+            if camera_id not in self._camera_states:
+                self._camera_states[camera_id] = _CameraState()
+            return self._camera_states[camera_id]
 
     def _get_face_service(self):
         if not self._face_service_loaded:
@@ -130,64 +154,145 @@ class FallDetector:
                 self.face_service = None
         return self.face_service
 
-    def _analyze_skeleton_geometry(self, kpts, bw, bh, box_xyxyn=None):
-        """Robust geometric analysis from detected keypoints."""
-        valid = [(kpts[i][0], kpts[i][1], i) for i in range(17) if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
-        
-        # Estimate head_y (average Y of nose/eyes/ears/shoulders)
-        head_kpts = [kpts[i][1] for i in range(7) if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
-        head_y = np.mean(head_kpts) if head_kpts else (box_xyxyn[1] if box_xyxyn is not None else 0.5)
+    def _analyze_skeleton_geometry(self, kpts_xy, bw, bh, box_xyxyn=None, kpts_conf=None, min_conf=0.30):
+        """Robust geometric analysis in 1:1 pixel coordinates (avoids aspect distortion & occluded-side tilt)."""
+        kpts_arr = np.asarray(kpts_xy, dtype=np.float32)
+        nonzero = (np.abs(kpts_arr[:, 0]) > 1e-4) | (np.abs(kpts_arr[:, 1]) > 1e-4)
+        if kpts_conf is not None:
+            valid_mask = (np.asarray(kpts_conf, dtype=np.float32) >= min_conf) & nonzero
+        else:
+            valid_mask = nonzero
 
-        # Check body keypoints (shoulders 5,6 / hips 11,12 / knees 13,14 / ankles 15,16)
-        body_kpts_count = sum(1 for i in range(5, 17) if kpts[i][0] > 0.01 and kpts[i][1] > 0.01)
+        valid_pts = [(float(kpts_arr[i][0]), float(kpts_arr[i][1]), i) for i in range(17) if valid_mask[i]]
 
-        if len(valid) < 4:
-            ar = bw / bh if bh > 0 else 0
+        # Normalized head_y (0..1) if box provided, otherwise from keypoints
+        head_kpts = [kpts_arr[i][1] for i in range(7) if valid_mask[i]]
+        head_y = float(np.mean(head_kpts)) if head_kpts else (float(box_xyxyn[1]) if box_xyxyn is not None else 0.5)
+        body_kpts_count = sum(1 for i in range(5, 17) if valid_mask[i])
+        ar = float(bw / bh) if bh > 0 else 0.0
+
+        if len(valid_pts) < 4:
             return {
                 'is_horizontal': False,
                 'aspect_ratio': ar,
                 'torso_angle': None,
+                'dy_signed': 0.0,
+                'torso_len': 0.0,
                 'kpt_span_ratio': ar,
                 'head_y': head_y,
-                'valid_count': len(valid),
-                'body_kpts_count': body_kpts_count
+                'valid_count': len(valid_pts),
+                'body_kpts_count': body_kpts_count,
             }
-        
-        xs = [p[0] for p in valid]
-        ys = [p[1] for p in valid]
+
+        xs = [p[0] for p in valid_pts]
+        ys = [p[1] for p in valid_pts]
         x_span = max(xs) - min(xs)
         y_span = max(ys) - min(ys)
-        kpt_span_ratio = (x_span / y_span) if y_span > 0.01 else 2.0
-        ar = bw / bh if bh > 0 else kpt_span_ratio
+        kpt_span_ratio = (x_span / y_span) if y_span > 1.0 else 2.0
+        if bh <= 0:
+            ar = kpt_span_ratio
 
-        # Find shoulders (5, 6) and hips (11, 12)
-        shoulders = [kpts[i] for i in [5, 6] if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
-        hips = [kpts[i] for i in [11, 12] if kpts[i][0] > 0.01 and kpts[i][1] > 0.01]
-
-        torso_angle = None
-        if shoulders and hips:
-            s_x = np.mean([p[0] for p in shoulders])
-            s_y = np.mean([p[1] for p in shoulders])
-            h_x = np.mean([p[0] for p in hips])
-            h_y = np.mean([p[1] for p in hips])
-            dx = abs(s_x - h_x)
-            dy = abs(s_y - h_y)
-            # 0 deg = vertical standing/sitting, 90 deg = horizontal lying
-            torso_angle = np.degrees(np.arctan2(dx, dy)) if dy > 0.005 else 90.0
-        else:
-            torso_angle = None
-
+        torso_angle, dy_signed, torso_len = safe_torso_angle_and_dy(kpts_arr, valid_mask)
         is_horizontal = bool(torso_angle is not None and torso_angle > 55)
 
         return {
             'is_horizontal': is_horizontal,
             'aspect_ratio': ar,
             'torso_angle': torso_angle,
+            'dy_signed': dy_signed,
+            'torso_len': torso_len,
             'kpt_span_ratio': kpt_span_ratio,
             'head_y': head_y,
-            'valid_count': len(valid),
-            'body_kpts_count': body_kpts_count
+            'valid_count': len(valid_pts),
+            'body_kpts_count': body_kpts_count,
         }
+
+    def _classify_person_pose(self, prediction, ai_confidence, kpts_xyn, kpts_xy, kpts_conf, box_xywh, box_xyxyn):
+        """Decide (is_falling, label_text) combining ML probabilities with occlusion-aware geometry."""
+        pose_name = self.pose_labels.get(int(prediction), "Unknown")
+        bw, bh = float(box_xywh[2]), float(box_xywh[3])
+        y1, y2 = float(box_xyxyn[1]), float(box_xyxyn[3])
+        bh_norm = max(0.0, y2 - y1)
+
+        geo = self._analyze_skeleton_geometry(kpts_xy, bw, bh, box_xyxyn, kpts_conf=kpts_conf)
+        ar = geo['aspect_ratio']
+        torso_angle = geo['torso_angle']
+        dy_signed = geo['dy_signed']
+
+        def _kp_ok(j):
+            return bool(kpts_conf[j] > 0.35 and (kpts_xyn[j][0] > 0.01 or kpts_xyn[j][1] > 0.01))
+
+        has_hips = any(_kp_ok(j) for j in (11, 12))
+        has_legs = any(_kp_ok(j) for j in (13, 14, 15, 16))
+        has_lower_body = bool(has_hips or has_legs)
+        head_kpts_count = sum(1 for j in range(5) if _kp_ok(j))
+
+        shoulders_y_norm = [float(kpts_xyn[j][1]) for j in (5, 6) if kpts_conf[j] > 0.40 and (kpts_xyn[j][0] > 0.01 or kpts_xyn[j][1] > 0.01)]
+        hips_y_norm = [float(kpts_xyn[j][1]) for j in (11, 12) if kpts_conf[j] > 0.40 and (kpts_xyn[j][0] > 0.01 or kpts_xyn[j][1] > 0.01)]
+        knees_y_norm = [float(kpts_xyn[j][1]) for j in (13, 14) if _kp_ok(j)]
+
+        is_face_or_upper_closeup = bool(not has_lower_body or (not has_hips and head_kpts_count >= 2))
+        # Upright/partially occluded behind table/furniture: legs hidden & torso not inverted/horizontal
+        is_table_occluded_upright = bool(
+            not has_legs
+            and (torso_angle is None or torso_angle < 58.0)
+            and (dy_signed >= 0.0 or not (shoulders_y_norm and hips_y_norm))
+        )
+        is_head_lower_than_hips = bool(
+            has_lower_body and has_hips and shoulders_y_norm and hips_y_norm
+            and (np.mean(shoulders_y_norm) > np.mean(hips_y_norm) + 0.08)
+        )
+        is_upright_chair = bool(
+            prediction in (1, 2) and ai_confidence >= 0.45
+            and torso_angle is not None and torso_angle < 45.0
+        )
+        is_standing_bend = bool(
+            prediction in (1, 3) and ai_confidence >= 0.45
+            and has_legs and bh_norm >= 0.48
+            and (
+                y1 <= 0.48
+                or (shoulders_y_norm and knees_y_norm and hips_y_norm and np.mean(knees_y_norm) > np.mean(hips_y_norm) + 0.04)
+            )
+        )
+        is_lying_in_floor_zone = bool(
+            has_hips and has_legs and not is_upright_chair and not is_standing_bend
+            and y1 > 0.45 and bh_norm < 0.52
+            and (
+                ar > 1.25
+                or (torso_angle is not None and torso_angle > 50.0)
+                or (prediction == 4 and ai_confidence >= 0.42)
+                or (y1 > 0.50 and bh_norm < 0.46 and torso_angle is None)
+            )
+        )
+        ai_fall_allowed = bool(
+            prediction == 4
+            and has_lower_body
+            and (has_legs or (torso_angle is not None and torso_angle > 62.0))
+            and (
+                (ai_confidence >= 0.50 and (y1 >= 0.38 or (torso_angle is not None and torso_angle >= 42.0) or ar > 1.15))
+                or (ai_confidence >= 0.72 and ar > 1.05)
+            )
+        )
+
+        if is_face_or_upper_closeup:
+            return False, ("Close-up" if not has_lower_body else pose_name), geo
+        if is_head_lower_than_hips:
+            return True, "FALL (Floor)", geo
+        if is_table_occluded_upright:
+            return False, (pose_name if pose_name != "Fall" else "Sit"), geo
+        if is_lying_in_floor_zone:
+            return True, "FALL (Floor)", geo
+        if ai_fall_allowed:
+            return True, f"FALL (AI {ai_confidence*100:.0f}%)", geo
+        if (
+            not is_standing_bend
+            and torso_angle is not None and torso_angle > 58.0
+            and has_hips and (has_legs or torso_angle > 68.0)
+            and y2 > 0.35 and bh_norm < 0.72
+        ):
+            return True, "FALL (Angle)", geo
+
+        return False, pose_name, geo
 
     def async_play_alert(self, camera_name):
         current_time = time.time()
@@ -255,125 +360,89 @@ class FallDetector:
                 
         threading.Thread(target=_speak, daemon=True).start()
 
-    def process_frame(self, frame, camera_name="Unknown", camera_id=None):
-        """Process a frame for multi-person fall detection."""
+    def process_frame(self, frame, camera_name="Unknown", camera_id=None, draw=True):
+        """Process a frame for multi-person fall detection.
+
+        Set draw=False in live RTSP pipelines where a separate display thread draws
+        cached overlays via draw_overlay(), avoiding redundant plot()/resize overhead.
+        """
         if camera_id is None:
             camera_id = camera_name
         state = self._get_state(camera_id)
 
         if self.fall_model is None:
-            _draw_text_with_badge(frame, "Model Error", (20, 50), text_color=(0, 0, 255))
+            if draw:
+                _draw_text_with_badge(frame, "Model Error", (20, 50), text_color=(0, 0, 255))
             return frame
 
-        original_frame = frame.copy()
-
+        source_frame = frame
         h, w = frame.shape[:2]
-        scale = self._yolo_input_size / max(h, w)
-        small_w = int(w * scale)
-        small_h = int(h * scale)
-        small_frame = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
-        
-        results = self.pose_model(small_frame, verbose=False, conf=self.conf_threshold)
+        max_dim = max(h, w)
+        if max_dim > self._yolo_input_size:
+            scale = self._yolo_input_size / max_dim
+            infer_frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR)
+        else:
+            infer_frame = frame
+
+        with self._infer_lock:
+            results = self.pose_model(
+                infer_frame,
+                verbose=False,
+                conf=self.conf_threshold,
+            )
 
         if results[0].keypoints is not None and len(results[0].keypoints) > 0:
-             annotated_small = results[0].plot()
-             frame = cv2.resize(annotated_small, (w, h), interpolation=cv2.INTER_LINEAR)
+             if draw:
+                 annotated = results[0].plot()
+                 frame = cv2.resize(annotated, (w, h), interpolation=cv2.INTER_LINEAR) if infer_frame is not frame else annotated
 
              num_persons = len(results[0].keypoints)
              any_falling = False
              persons_data = []
 
-             # ── Batch RF inference: predict ALL persons in one call ──────
-             all_kpts = [results[0].keypoints.xyn[i].cpu().numpy() for i in range(num_persons)]
-             all_rows = [kpts.flatten().tolist() for kpts in all_kpts]
-             all_predictions = self.fall_model.predict(all_rows)
-             all_probs = self.fall_model.predict_proba(all_rows)
+             all_kpts_xyn = results[0].keypoints.xyn.cpu().numpy()
+             all_kpts_xy = results[0].keypoints.xy.cpu().numpy()
+             if results[0].keypoints.conf is not None:
+                 all_kpts_conf = results[0].keypoints.conf.cpu().numpy()
+             else:
+                 all_kpts_conf = np.ones((num_persons, 17), dtype=np.float32)
 
-             for i in range(num_persons):
-                 kpts = all_kpts[i]
-                 row = all_rows[i]
+             all_boxes_xywh = results[0].boxes.xywh.cpu().numpy()
+             all_boxes_xyxyn = results[0].boxes.xyxyn.cpu().numpy()
 
-                 # Pose result from batched RF call
-                 prediction = all_predictions[i]
-                 prob = all_probs[i]
-                 ai_confidence = prob[prediction]
-                 pose_name = self.pose_labels.get(prediction, "Unknown")
-
-                 box = results[0].boxes.xywh[i].cpu().numpy()
-                 box_xyxyn = results[0].boxes.xyxyn[i].cpu().numpy()
-                 bw, bh = box[2], box[3]
-                 y1, y2 = box_xyxyn[1], box_xyxyn[3]
-
-                 # Geometric analysis
-                 geo = self._analyze_skeleton_geometry(kpts, bw, bh, box_xyxyn)
-                 ar = geo['aspect_ratio']
-                 head_y = geo['head_y']
-                 torso_angle = geo['torso_angle']
-                 body_kpts_count = geo['body_kpts_count']
-                 valid_count = geo['valid_count']
-
-                 if results[0].keypoints.conf is not None:
-                     kpts_conf = results[0].keypoints.conf[i].cpu().numpy()
-                 else:
-                     kpts_conf = np.ones(17)
-
-                 # Strict Lower Body Keypoint Check (only count if confidence > 0.35)
-                 has_hips = any(kpts_conf[j] > 0.35 and kpts[j][0] > 0.01 for j in [11, 12])
-                 has_legs = any(kpts_conf[j] > 0.35 and kpts[j][0] > 0.01 for j in [13, 14, 15, 16])
-                 has_lower_body = bool(has_hips or has_legs)
-
-                 # Head keypoints count (0:nose, 1,2:eyes, 3,4:ears)
-                 head_kpts_count = sum(1 for j in range(5) if kpts_conf[j] > 0.35 and kpts[j][0] > 0.01)
-
-                 # Head vs Hip Y check
-                 shoulders_y = [kpts[j][1] for j in [5, 6] if kpts_conf[j] > 0.35 and kpts[j][0] > 0.01]
-                 hips_y = [kpts[j][1] for j in [11, 12] if kpts_conf[j] > 0.35 and kpts[j][0] > 0.01]
-
-                 # Close-up face/upper-chest check (no lower body detected, or head is dominant)
-                 is_face_or_upper_closeup = bool(not has_lower_body or (not has_hips and head_kpts_count >= 2))
-
-                 # Lying flat on floor check (must have lower body, hips, and be positioned in floor zone)
-                 is_lying_in_floor_zone = bool(has_lower_body and has_hips and y1 > 0.45 and (bh < 0.50 or ar > 1.25))
-
-                 # Head inversion on floor (head lower than hips by > 0.10)
-                 is_head_lower_than_hips = bool(
-                     has_lower_body and has_hips and shoulders_y and hips_y and 
-                     (np.mean(shoulders_y) > np.mean(hips_y) + 0.10)
+             # Batch ML inference using single predict_proba call
+             if self._use_pose_features:
+                 all_rows = np.asarray(
+                     [extract_pose_features(all_kpts_xy[i], all_kpts_conf[i]) for i in range(num_persons)],
+                     dtype=np.float32,
+                 )
+             else:
+                 all_rows = np.asarray(
+                     [all_kpts_xyn[i].flatten() for i in range(num_persons)],
+                     dtype=np.float32,
                  )
 
-                 # Upright posture (sitting/standing with head above hips and torso angle < 50)
-                 is_standing_or_sitting_upright = bool((y1 < 0.40 or head_y < 0.42) and (torso_angle is not None and torso_angle < 50))
+             with self._infer_lock:
+                 all_probs = self.fall_model.predict_proba(all_rows)
 
-                 # ═══ Enhanced & Robust Fall Decision Logic ═══
-                 is_falling = False
+             best_col_idx = np.argmax(all_probs, axis=1)
+             all_predictions = self._model_classes[best_col_idx]
+             all_confidences = all_probs[np.arange(num_persons), best_col_idx]
 
-                 if is_face_or_upper_closeup:
-                     # Face or Upper Body Close-up (NEVER a fall!)
-                     is_falling = False
-                     label_text = "Close-up"
-                 elif is_lying_in_floor_zone or is_head_lower_than_hips:
-                     # Lying flat on floor (on back, on stomach, or head-first) -> FALL
-                     is_falling = True
-                     label_text = "FALL (Floor)"
-                 elif prediction == 4 and ai_confidence > 0.45 and has_lower_body:
-                     # AI model confident it's a fall
-                     is_falling = True
-                     label_text = f"FALL (AI {ai_confidence*100:.0f}%)"
-                 elif torso_angle is not None and torso_angle > 55 and has_lower_body and y2 > 0.35:
-                     # Body torso tilted horizontally -> Fall
-                     is_falling = True
-                     label_text = "FALL (Angle)"
-                 elif is_standing_or_sitting_upright:
-                     # Standing / Walking / Sitting upright
-                     is_falling = False
-                     label_text = f"{pose_name}"
-                 elif ar < 0.75:
-                     # Tall box -> Standing/Walking
-                     is_falling = False
-                     label_text = f"{pose_name}"
-                 else:
-                     is_falling = False
-                     label_text = f"{pose_name}"
+             for i in range(num_persons):
+                 kpts = all_kpts_xyn[i]
+                 kpts_xy = all_kpts_xy[i]
+                 kpts_conf = all_kpts_conf[i]
+                 prediction = int(all_predictions[i])
+                 ai_confidence = float(all_confidences[i])
+                 pose_name = self.pose_labels.get(prediction, "Unknown")
+
+                 box = all_boxes_xywh[i]
+                 box_xyxyn = all_boxes_xyxyn[i]
+
+                 is_falling, label_text, _geo = self._classify_person_pose(
+                     prediction, ai_confidence, kpts, kpts_xy, kpts_conf, box, box_xyxyn
+                 )
 
                  if is_falling:
                      any_falling = True
@@ -382,7 +451,7 @@ class FallDetector:
                      'kpts_xyn': kpts,
                      'box_xyxyn': box_xyxyn,
                      'pose_name': "Fall" if is_falling else pose_name,
-                     'ai_conf': float(ai_confidence),
+                     'ai_conf': ai_confidence,
                      'is_falling': is_falling,
                      'label_text': label_text,
                  })
@@ -450,7 +519,7 @@ class FallDetector:
                              finally:
                                  self._get_state(c_id).is_checking_face = False
 
-                         threading.Thread(target=_async_face_check, args=(original_frame.copy(), camera_name, camera_id), daemon=True).start()
+                         threading.Thread(target=_async_face_check, args=(source_frame.copy(), camera_name, camera_id), daemon=True).start()
              else:
                  state.last_intruder_msg = ""
                  state.unknown_person_start_time = 0
@@ -477,12 +546,18 @@ class FallDetector:
                 self.async_play_alert(camera_name)
                 if self.on_fall_callback and not state._fall_callback_fired:
                     state._fall_callback_fired = True
-                    try:
-                        line_frame = original_frame.copy()
-                        self._draw_overlay_elements(line_frame, state, camera_name)
-                        self.on_fall_callback(camera_name, line_frame, time.time())
-                    except Exception as e:
-                        print(f"❌ Fall callback error: {e}")
+                    line_frame = source_frame.copy()
+                    self._draw_overlay_elements(line_frame, state, camera_name)
+                    ts_now = time.time()
+                    cb = self.on_fall_callback
+
+                    def _dispatch_fall(cb_fn=cb, cname=camera_name, img=line_frame, ts=ts_now):
+                        try:
+                            cb_fn(cname, img, ts)
+                        except Exception as e:
+                            print(f"❌ Fall callback error: {e}")
+
+                    threading.Thread(target=_dispatch_fall, daemon=True).start()
              else:
                  state.status = 'Normal'
                  state.color = (0, 255, 0) # Green
@@ -494,8 +569,9 @@ class FallDetector:
              self.color = state.color
              self._fall_callback_fired = state._fall_callback_fired
 
-             # Draw clear person badges on frame
-             self._draw_overlay_elements(frame, state, camera_name)
+             if draw:
+                 # Draw clear person badges on frame
+                 self._draw_overlay_elements(frame, state, camera_name)
 
         else:
             state.status = "No Person"
@@ -505,7 +581,8 @@ class FallDetector:
             state.unknown_person_start_time = 0
             state.last_intruder_msg = ""
             self.status = "No Person"
-            _draw_text_with_badge(frame, f"Cam: {camera_name} | No Person", (15, 22), font_scale=0.50, text_color=(0, 255, 255), thickness=1)
+            if draw:
+                _draw_text_with_badge(frame, f"Cam: {camera_name} | No Person", (15, 22), font_scale=0.50, text_color=(0, 255, 255), thickness=1)
 
         return frame
 

@@ -2,15 +2,15 @@
   display: flex;
   gap: 12px;
   padding: 0;
-  margin-bottom: var(--space-md);
   overflow: hidden;
+  height: 100%;
 }
 
 .fall-event-timeline {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 16px 0 0 12px;
+  padding: 18px 0 14px 14px;
   flex-shrink: 0;
 }
 
@@ -19,68 +19,139 @@
   height: 10px;
   border-radius: 50%;
   background: var(--danger);
-  box-shadow: 0 0 8px var(--danger-glow);
+  box-shadow: 0 0 0 4px var(--danger-glow);
   flex-shrink: 0;
 }
 
 .fall-event-line {
   width: 2px;
   flex: 1;
-  background: linear-gradient(to bottom, var(--danger), transparent);
-  margin-top: 6px;
+  background: linear-gradient(to bottom, var(--danger-glow), transparent);
+  margin-top: 8px;
 }
 
 .fall-event-content {
   flex: 1;
-  padding: 14px 14px 14px 0;
+  min-width: 0;
+  padding: 14px 16px 14px 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .fall-event-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.fall-event-time-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--danger-glow);
+  color: var(--danger-text);
+}
+
+.fall-event-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
 }
 
 .fall-event-time {
-  font-size: 15px;
+  font-size: 0.875rem;
   font-weight: 700;
-  color: var(--danger);
 }
 
 .fall-event-camera {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-1);
 }
 
 .fall-event-snapshot {
   width: 100%;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   overflow: hidden;
   margin-bottom: 10px;
-  background: var(--bg-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 
-.fall-event-snapshot img {
+.fall-event-snapshot-btn {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.fall-event-snapshot-btn img {
   width: 100%;
   aspect-ratio: 16 / 9;
   object-fit: cover;
+  transition: transform 0.25s ease;
+}
+
+.fall-event-snapshot-btn:hover img {
+  transform: scale(1.02);
+}
+
+.fall-event-zoom-pill {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(11, 15, 23, 0.78);
+  color: #f8fafc;
+  font-size: 0.72rem;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+}
+
+.fall-event-snapshot-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  aspect-ratio: 16 / 9;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 0.78rem;
 }
 
 .fall-event-details {
+  margin-top: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .fall-event-duration {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
   color: var(--text-2);
 }
 
 .fall-event-ip {
-  font-size: 11px;
+  font-size: 0.72rem;
   color: var(--text-3);
-  font-family: 'SF Mono', 'Fira Code', monospace;
 }

@@ -1,10 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" fill="none">
+  <rect width="36" height="36" rx="10" fill="url(#fg)" />
+  <path
+    d="M18 6.5L8.5 10.5V17.4C8.5 23.3 12.55 28.7 18 30.2C23.45 28.7 27.5 23.3 27.5 17.4V10.5L18 6.5Z"
+    stroke="white"
+    stroke-width="2"
+    stroke-linejoin="round"
+    fill="rgba(255,255,255,0.12)"
+  />
+  <path
+    d="M12.2 18.2H15L16.6 14.5L19.4 21.8L21.1 18.2H23.8"
+    stroke="white"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
   <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#6c63ff"/>
-      <stop offset="100%" style="stop-color:#00d4aa"/>
+    <linearGradient id="fg" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0284C7" />
+      <stop offset="1" stop-color="#0D9488" />
     </linearGradient>
   </defs>
-  <circle cx="50" cy="50" r="45" fill="url(#g)" opacity="0.15"/>
-  <text x="50" y="62" text-anchor="middle" font-size="50">🛡️</text>
 </svg>

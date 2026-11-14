@@ -3,11 +3,11 @@ import threading
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from onvif import ONVIFCamera
+from zeep.transports import Transport
 
-COMMON_PORTS = [
-    5000, 8080, 8899, 80, 81, 202, 554, 8000, 9000, 9001,
-    9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009,
-]
+PRIMARY_PORTS = [554, 8899, 8000, 8080, 5000, 80]
+SECONDARY_PORTS = [81, 202, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009]
+COMMON_PORTS = PRIMARY_PORTS + SECONDARY_PORTS
 
 def get_mac_address(ip):
     """ดึง MAC Address ของอุปกรณ์ในวง LAN ผ่าน Windows SendARP API หรือ arp -a"""
@@ -53,40 +53,69 @@ def is_valid_serial(sn):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def get_all_subnets():
-    """ดึง subnet จากทุก network interface ที่มี IPv4 address
+    """ดึง subnet จากทุก network interface ที่มี IPv4 address (เรียง primary route ขึ้นก่อน)
     
-    ใช้ socket.getaddrinfo() กับ hostname เพื่อดึง IP ทุก interface
     รองรับกรณี PC เชื่อมทั้ง WiFi hotspot (172.20.10.x) และ LAN (192.168.x.x) พร้อมกัน
     """
-    subnets = set()
+    subnets = []
+    seen = set()
+
+    # 1. Primary outbound interface first (fastest route to LAN/router)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("1.1.1.1", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        if local_ip and not local_ip.startswith(("127.", "169.254.")):
+            sub = ".".join(local_ip.split(".")[:3])
+            seen.add(sub)
+            subnets.append(sub)
+    except Exception:
+        pass
+
+    # 2. All other active non-loopback / non-APIPA interfaces
     try:
         hostname = socket.gethostname()
         addr_infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
         for info in addr_infos:
             ip = info[4][0]
-            # ข้าม loopback
-            if ip.startswith("127."):
+            if ip.startswith(("127.", "169.254.")):
                 continue
             subnet = ".".join(ip.split(".")[:3])
-            subnets.add(subnet)
+            if subnet not in seen:
+                seen.add(subnet)
+                subnets.append(subnet)
     except Exception as e:
         print(f"⚠️ getaddrinfo failed: {e}")
 
-    # Fallback: ถ้าไม่เจอ subnet เลย ใช้วิธีเดิม
-    if not subnets:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("1.1.1.1", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            subnets.add(".".join(local_ip.split(".")[:3]))
-        except Exception:
-            pass
-
-    return list(subnets)
+    return subnets
 
 
-def _check_port(ip, port, timeout=0.5):
+def _get_arp_ips():
+    """Read live LAN IPs from OS ARP table in <20ms so known hosts are found immediately."""
+    ips = []
+    try:
+        import subprocess
+        import re
+        output = subprocess.check_output(
+            ["arp", "-a"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+        for m in re.finditer(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', output):
+            ip = m.group(1)
+            if ip.startswith(("127.", "169.254.", "224.", "239.", "255.")) or ip.endswith(".255") or ip.endswith(".0"):
+                continue
+            if ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
+def _check_port(ip, port, timeout=0.25):
     """ตรวจสอบว่า port เปิดอยู่หรือไม่"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -98,19 +127,16 @@ def _check_port(ip, port, timeout=0.5):
         return False
 
 
-def _check_ip_ports(ip):
+def _check_ip_ports(ip, ports=None, timeout=0.25):
     """ตรวจสอบว่า IP นี้มี port ใดเปิดอยู่บ้าง → return (ip, port) หรือ None"""
-    for port in COMMON_PORTS:
-        if _check_port(ip, port):
+    for port in (ports or PRIMARY_PORTS):
+        if _check_port(ip, port, timeout=timeout):
             return (ip, port)
     return None
 
 
 def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multiprocessing.Event):
-    """ฟังก์ชันหลักของ scanner process — รันบน core แยก วน loop ไม่หยุด
-    
-    สแกนทุก subnet → ส่ง (ip, port) ที่เจอกลับทาง Queue
-    """
+    """ฟังก์ชันหลักของ scanner process — สแกนเร็วแบบ 2 เฟส (ARP + Primary Ports → Secondary Ports)"""
     import time
 
     print("🔄 [Scanner Process] เริ่มทำงานบน core แยก (multiprocessing)")
@@ -118,27 +144,66 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
     while not stop_event.is_set():
         try:
             subnets = get_all_subnets()
-            print(f"📡 [Scanner Process] สแกน {len(subnets)} subnet(s): {subnets}")
+            arp_ips = _get_arp_ips()
+            print(f"📡 [Scanner Process] สแกน {len(subnets)} subnet(s): {subnets} (ARP hosts: {len(arp_ips)})")
 
-            # สร้าง list IP ทั้งหมดจากทุก subnet
+            found_ips = set()
+
+            # Phase 0: Check live ARP hosts first across PRIMARY_PORTS (<0.5s!)
+            if arp_ips:
+                with ThreadPoolExecutor(max_workers=min(64, len(arp_ips))) as executor:
+                    futures = {executor.submit(_check_ip_ports, ip, PRIMARY_PORTS, 0.25): ip for ip in arp_ips}
+                    for future in futures:
+                        if stop_event.is_set():
+                            break
+                        try:
+                            result = future.result(timeout=5)
+                            if result:
+                                ip, port = result
+                                found_ips.add(ip)
+                                result_queue.put(("found", ip, port))
+                        except Exception:
+                            pass
+
+            # Build full subnet IP list (excluding already-found ARP IPs)
             all_ips = []
             for subnet in subnets:
                 for i in range(1, 255):
-                    all_ips.append(f"{subnet}.{i}")
+                    cand = f"{subnet}.{i}"
+                    if cand not in found_ips:
+                        all_ips.append(cand)
 
-            # ใช้ ThreadPool ภายใน process เพื่อสแกนหลาย IP พร้อมกัน
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = {executor.submit(_check_ip_ports, ip): ip for ip in all_ips}
+            # Phase 1: Fast scan on PRIMARY_PORTS across all subnet IPs (~3s per /24)
+            with ThreadPoolExecutor(max_workers=100) as executor:
+                futures = {executor.submit(_check_ip_ports, ip, PRIMARY_PORTS, 0.25): ip for ip in all_ips}
                 for future in futures:
                     if stop_event.is_set():
                         break
                     try:
-                        result = future.result(timeout=10)
+                        result = future.result(timeout=6)
                         if result:
                             ip, port = result
+                            found_ips.add(ip)
                             result_queue.put(("found", ip, port))
                     except Exception:
                         pass
+
+            # Phase 2: Secondary ports only for remaining IPs
+            remaining_ips = [ip for ip in all_ips if ip not in found_ips]
+            if remaining_ips and not stop_event.is_set():
+                with ThreadPoolExecutor(max_workers=128) as executor:
+                    futures = {executor.submit(_check_ip_ports, ip, SECONDARY_PORTS, 0.18): ip for ip in remaining_ips}
+                    for future in futures:
+                        if stop_event.is_set():
+                            break
+                        try:
+                            result = future.result(timeout=8)
+                            if result:
+                                ip, port = result
+                                found_ips.add(ip)
+                                result_queue.put(("found", ip, port))
+                        except Exception:
+                            pass
 
             # ส่งสัญญาณว่ารอบสแกนเสร็จแล้ว
             result_queue.put(("scan_complete", None, None))
@@ -146,8 +211,8 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
         except Exception as e:
             print(f"❌ [Scanner Process] Error: {e}")
 
-        # รอ 15 วินาทีก่อนสแกนรอบถัดไป (ลดจาก 30s เพราะสแกนหลาย subnet)
-        for _ in range(150):  # 150 x 0.1s = 15s, ตรวจ stop_event ทุก 0.1s
+        # รอ 4 วินาทีก่อนสแกนรอบถัดไป (ฟื้นตัวไวเมื่อเน็ต/WiFi กลับมา)
+        for _ in range(40):  # 40 x 0.1s = 4s
             if stop_event.is_set():
                 break
             time.sleep(0.1)
@@ -168,6 +233,8 @@ class NetworkScanner:
         self._stop_event = multiprocessing.Event()
         self._scanner_process = None
         self._reader_thread = None
+        self._probing_ips = set()
+        self._probe_lock = threading.Lock()
 
     def _load_credentials(self):
         import json
@@ -209,12 +276,73 @@ class NetworkScanner:
         except Exception as e:
             print(f"❌ Error saving config: {e}")
 
-    def check_port(self, ip, port):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        result = s.connect_ex((ip, port))
-        s.close()
-        return result == 0
+    def check_port(self, ip, port, timeout=0.35):
+        return _check_port(ip, port, timeout=timeout)
+
+    def _needs_naming(self, serial_number, ip):
+        import json
+        import os
+        if os.path.exists("config/cameras.json"):
+            try:
+                with open("config/cameras.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    if serial_number in config or ip in config:
+                        return False
+            except Exception:
+                pass
+        return True
+
+    def _capture_preview_image(self, ip, rtsp_url):
+        import av
+        import cv2
+        import os
+        import tempfile
+        print(f"📸 [IP: {ip}] กำลังดึงภาพตัวอย่างจากสตรีม...")
+
+        av_options_list = [
+            {"timeout": "2000000", "probesize": "262144", "analyzeduration": "500000"},
+            {"rtsp_transport": "tcp", "timeout": "2000000", "probesize": "262144", "analyzeduration": "500000"},
+            {"rtsp_transport": "udp", "timeout": "2000000", "probesize": "262144", "analyzeduration": "500000"},
+        ]
+        candidates = [
+            rtsp_url,
+            f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
+            f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
+            f"rtsp://{ip}:554/onvif1",
+            f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=1.sdp",
+            f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
+            f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
+        ]
+        seen = set()
+        for candidate in [u for u in candidates if u and u not in seen and not seen.add(u)]:
+            for av_opts in av_options_list:
+                try:
+                    container = av.open(candidate, mode='r', options=av_opts, timeout=2.5)
+                    if not container.streams.video:
+                        container.close()
+                        continue
+                    stream = container.streams.video[0]
+                    stream.thread_type = 'SLICE'
+                    for packet in container.demux(stream):
+                        if packet.dts is None:
+                            continue
+                        try:
+                            for frame in packet.decode():
+                                img = frame.to_ndarray(format='bgr24')
+                                fd, temp_path = tempfile.mkstemp(suffix=".jpg")
+                                os.close(fd)
+                                cv2.imwrite(temp_path, img)
+                                proto = av_opts.get('rtsp_transport', 'auto').upper()
+                                print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
+                                container.close()
+                                return temp_path
+                        except Exception:
+                            pass
+                    container.close()
+                except Exception:
+                    pass
+        print(f"ℹ️ [IP: {ip}] เพิ่มกล้องโดยไม่มีภาพตัวอย่าง")
+        return None
 
     def get_onvif(self, ip, port=None):
         """เชื่อมต่อ ONVIF กับกล้องที่ IP นี้ — รันบน main process"""
@@ -222,190 +350,156 @@ class NetworkScanner:
         if self.camera_manager.is_pending_or_active(ip):
             return
 
-        # Skip local machine IP (e.g. FastAPI on 8000)
-        try:
-            local_ips = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
-            if ip in local_ips or ip.startswith("127."):
+        with self._probe_lock:
+            if ip in self._probing_ips:
                 return
-        except Exception:
-            pass
+            self._probing_ips.add(ip)
 
-        print(f"🔍 [IP: {ip}] เริ่มเชื่อมต่อ ONVIF...")
-
-        # ถ้ามี port ที่รู้แล้ว ลองที่นั้นก่อน แล้วค่อยลองพอร์ตอื่น
-        ports_to_try = []
-        if port:
-            ports_to_try.append(port)
-        ports_to_try.extend([p for p in COMMON_PORTS if p != port])
-
-        for try_port in ports_to_try:
-            if not self.check_port(ip, try_port):
-                continue
-            
-            print(f"✅ [IP: {ip}] พอร์ต {try_port} เปิดอยู่ กำลังเชื่อมต่อ ONVIF...")
+        try:
+            # Skip local machine IP (e.g. FastAPI on 8000)
             try:
-                cam = ONVIFCamera(ip, try_port, self.user, self.password)
-                media_service = cam.create_media_service()
-                token = media_service.GetProfiles()[0].token # type: ignore
+                local_ips = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+                if ip in local_ips or ip.startswith("127."):
+                    return
+            except Exception:
+                pass
 
-                request = media_service.create_type("GetStreamUri")
-                request.ProfileToken = token
-                request.StreamSetup = {
-                    "Stream": "RTP-Unicast",
-                    "Transport": {"Protocol": "RTSP"},
-                }
-                rtsp_url = media_service.GetStreamUri(request).Uri # type: ignore
+            # Fast path: if this IP is a cached known camera and RTSP port 554 is open, connect immediately!
+            for cached in self.camera_manager.get_cached_cameras():
+                c_ip = cached.get("ip")
+                c_url = cached.get("rtsp_url")
+                c_sn = cached.get("serial_number")
+                if c_ip == ip and c_url and c_sn and not self._needs_naming(c_sn, ip):
+                    if self.check_port(ip, 554, timeout=0.35):
+                        print(f"⚡ [IP: {ip}] พบกล้องที่เคยเชื่อมต่อแล้ว — เชื่อมต่อด่วนผ่าน Cache ({c_url})")
+                        if self.on_camera_found:
+                            self.on_camera_found(ip, c_url, False, None, c_sn)
+                        return
 
-                if "://" in rtsp_url and f"{self.user}:" not in rtsp_url:
-                    parts = rtsp_url.split("://")
-                    rtsp_url = f"{parts[0]}://{self.user}:{self.password}@{parts[1]}"
-                
-                print(f"📷 [IP: {ip}] พบกล้อง ONVIF (RTSP: {rtsp_url})")
+            print(f"🔍 [IP: {ip}] เริ่มเชื่อมต่อ ONVIF...")
 
-                # Get Serial Number or hardware MAC Address
-                serial_number = None
+            # ถ้ามี port ที่รู้แล้ว ลองที่นั้นก่อน แล้วค่อยลองพอร์ตอื่น
+            ports_to_try = []
+            if port and port != 554:
+                ports_to_try.append(port)
+            ports_to_try.extend([p for p in COMMON_PORTS if p != port and p != 554])
+
+            for try_port in ports_to_try:
+                if not self.check_port(ip, try_port, timeout=0.3):
+                    continue
+
+                print(f"✅ [IP: {ip}] พอร์ต {try_port} เปิดอยู่ กำลังเชื่อมต่อ ONVIF...")
                 try:
-                    devicemgmt = cam.create_devicemgmt_service()
-                    device_info = devicemgmt.GetDeviceInformation()
-                    if device_info and hasattr(device_info, 'SerialNumber') and device_info.SerialNumber:
-                        sn_candidate = str(device_info.SerialNumber).strip()
-                        if is_valid_serial(sn_candidate):
-                            serial_number = sn_candidate
-                except Exception as e:
-                    print(f"ℹ️ [IP: {ip}] ดึง SerialNumber จาก ONVIF ไม่ได้: {e}")
+                    transport = Transport(timeout=3, operation_timeout=4)
+                    cam = ONVIFCamera(ip, try_port, self.user, self.password, transport=transport)
+                    media_service = cam.create_media_service()
+                    token = media_service.GetProfiles()[0].token # type: ignore
 
-                if not serial_number:
-                    mac = get_mac_address(ip)
-                    if mac:
-                        serial_number = mac
-                        print(f"📌 [IP: {ip}] ดึง MAC Address สำเร็จ: {mac}")
-                    else:
-                        serial_number = ip
-                        print(f"ℹ️ [IP: {ip}] ไม่สามารถดึง MAC Address ได้ ใช้ IP แทน")
+                    request = media_service.create_type("GetStreamUri")
+                    request.ProfileToken = token
+                    request.StreamSetup = {
+                        "Stream": "RTP-Unicast",
+                        "Transport": {"Protocol": "RTSP"},
+                    }
+                    rtsp_url = media_service.GetStreamUri(request).Uri # type: ignore
 
-                # Check if camera needs naming
-                import json
-                import os
-                needs_naming = True
-                if os.path.exists("config/cameras.json"):
+                    if "://" in rtsp_url and f"{self.user}:" not in rtsp_url:
+                        parts = rtsp_url.split("://")
+                        rtsp_url = f"{parts[0]}://{self.user}:{self.password}@{parts[1]}"
+
+                    print(f"📷 [IP: {ip}] พบกล้อง ONVIF (RTSP: {rtsp_url})")
+
+                    # Get Serial Number or hardware MAC Address
+                    serial_number = None
                     try:
-                        with open("config/cameras.json", "r", encoding="utf-8") as f:
-                            config = json.load(f)
-                            if serial_number in config:
-                                needs_naming = False
-                            elif ip in config:
-                                # Backward compatibility: if it was saved by IP before
-                                needs_naming = False
+                        devicemgmt = cam.create_devicemgmt_service()
+                        device_info = devicemgmt.GetDeviceInformation()
+                        if device_info and hasattr(device_info, 'SerialNumber') and device_info.SerialNumber:
+                            sn_candidate = str(device_info.SerialNumber).strip()
+                            if is_valid_serial(sn_candidate):
+                                serial_number = sn_candidate
+                    except Exception as e:
+                        print(f"ℹ️ [IP: {ip}] ดึง SerialNumber จาก ONVIF ไม่ได้: {e}")
+
+                    if not serial_number:
+                        mac = get_mac_address(ip)
+                        if mac:
+                            serial_number = mac
+                            print(f"📌 [IP: {ip}] ดึง MAC Address สำเร็จ: {mac}")
+                        else:
+                            serial_number = ip
+                            print(f"ℹ️ [IP: {ip}] ไม่สามารถดึง MAC Address ได้ ใช้ IP แทน")
+
+                    needs_naming = self._needs_naming(serial_number, ip)
+                    temp_path = self._capture_preview_image(ip, rtsp_url) if needs_naming else None
+
+                    if self.on_camera_found:
+                        self.on_camera_found(ip, rtsp_url, needs_naming, temp_path, serial_number)
+                    return
+
+                except Exception as e:
+                    err_msg = str(e).split('\n')[0][:120]
+                    print(f"❌ [IP: {ip}] พอร์ต {try_port}: {type(e).__name__}: {err_msg}")
+                    continue
+
+            # Fallback: ถ้า ONVIF SOAP ล้มเหลวทุกพอร์ต แต่พอร์ต 554 เปิดอยู่ ให้ลองดึง RTSP ตรงๆ
+            if self.check_port(ip, 554, timeout=0.4):
+                print(f"📡 [IP: {ip}] ลองเชื่อมต่อแบบ RTSP Direct Fallback...")
+                rtsp_candidates = [
+                    f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
+                    f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
+                    f"rtsp://{ip}:554/onvif1",
+                    f"rtsp://{ip}:554/onvif2",
+                    f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
+                    f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
+                ]
+                for candidate in rtsp_candidates:
+                    try:
+                        import av
+                        opts = {"timeout": "2000000", "probesize": "262144", "analyzeduration": "500000"}
+                        container = av.open(candidate, mode='r', options=opts, timeout=2.5)
+                        if container.streams.video:
+                            container.close()
+                            rtsp_url = candidate
+                            serial_number = get_mac_address(ip) or ip
+                            needs_naming = self._needs_naming(serial_number, ip)
+
+                            print(f"📷 [IP: {ip}] พบกล้องผ่าน RTSP Direct (URL: {rtsp_url})")
+                            if self.on_camera_found:
+                                self.on_camera_found(ip, rtsp_url, needs_naming, None, serial_number)
+                            return
+                        container.close()
                     except Exception:
                         pass
+        finally:
+            with self._probe_lock:
+                self._probing_ips.discard(ip)
 
-                temp_path = None
-                if needs_naming:
-                    import av
-                    import cv2
-                    import tempfile
-                    print(f"📸 [IP: {ip}] กำลังดึงภาพตัวอย่างจากสตรีม...")
+    def _probe_cached_cameras(self):
+        """Immediately probe known cached cameras on startup (<0.5s) before full scan."""
+        cached_list = self.camera_manager.get_cached_cameras()
+        # Also include raw IP keys saved in cameras.json (for backwards compat if no cache yet)
+        known_ips = {c.get("ip") for c in cached_list if c.get("ip")}
+        for key in list(self.camera_manager.camera_names.keys()):
+            parts = str(key).split('.')
+            if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                if key not in known_ips:
+                    cached_list.append({"ip": key, "rtsp_url": None, "serial_number": key})
 
-                    av_options_list = [
-                        {'stimeout': '2000000'},                               # Auto (เร็วที่สุด)
-                        {'rtsp_transport': 'tcp', 'stimeout': '2000000'},
-                        {'rtsp_transport': 'udp', 'stimeout': '2000000'},
-                    ]
-                    # Candidate URLs
-                    candidates = [
-                        rtsp_url,
-                        f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
-                        f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
-                        f"rtsp://{ip}:554/onvif1",
-                        f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=1.sdp",
-                        f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
-                        f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
-                    ]
-                    for candidate in candidates:
-                        for av_opts in av_options_list:
-                            try:
-                                container = av.open(candidate, mode='r', options=av_opts or None)
-                                if not container.streams.video:
-                                    container.close()
-                                    continue
-                                stream = container.streams.video[0]
-                                stream.thread_type = 'AUTO'
-                                for packet in container.demux(stream):
-                                    if packet.dts is None:
-                                        continue
-                                    try:
-                                        for frame in packet.decode():
-                                            img = frame.to_ndarray(format='bgr24')
-                                            fd, temp_path = tempfile.mkstemp(suffix=".jpg")
-                                            os.close(fd)
-                                            cv2.imwrite(temp_path, img)
-                                            proto = av_opts.get('rtsp_transport', 'plain').upper()
-                                            print(f"✅ [IP: {ip}] ดึงภาพตัวอย่างสำเร็จ ({proto}): {temp_path}")
-                                            break
-                                    except Exception:
-                                        pass
-                                    if temp_path:
-                                        break
-                                container.close()
-                                if temp_path:
-                                    break
-                            except Exception:
-                                pass
-                        if temp_path:
-                            break
-
-                    if not temp_path:
-                        print(f"ℹ️ [IP: {ip}] เพิ่มกล้องโดยไม่มีภาพตัวอย่าง")
-
-                if self.on_camera_found:
-                    self.on_camera_found(ip, rtsp_url, needs_naming, temp_path, serial_number)
-                return  # Done with this IP
-
-            except Exception as e:
-                err_msg = str(e).split('\n')[0][:120]
-                print(f"❌ [IP: {ip}] พอร์ต {try_port}: {type(e).__name__}: {err_msg}")
+        for cam in cached_list:
+            if self._stop_event.is_set():
+                return
+            ip = cam.get("ip")
+            if not ip or self.camera_manager.is_pending_or_active(ip):
                 continue
-
-        # Fallback: ถ้า ONVIF SOAP ล้มเหลวทุกพอร์ต แต่พอร์ต 554 เปิดอยู่ ให้ลองดึง RTSP ตรงๆ
-        if self.check_port(ip, 554):
-            print(f"📡 [IP: {ip}] ลองเชื่อมต่อแบบ RTSP Direct Fallback...")
-            rtsp_candidates = [
-                f"rtsp://{self.user}:{self.password}@{ip}:554/onvif1",
-                f"rtsp://{self.user}:{self.password}@{ip}:554/onvif2",
-                f"rtsp://{ip}:554/onvif1",
-                f"rtsp://{ip}:554/onvif2",
-                f"rtsp://{self.user}:{self.password}@{ip}:554/user={self.user}&password={self.password}&channel=1&stream=0.sdp",
-                f"rtsp://{self.user}:{self.password}@{ip}:554/live/ch0",
-            ]
-            for candidate in rtsp_candidates:
-                try:
-                    import av
-                    container = av.open(candidate, mode='r', options={'stimeout': '2000000'})
-                    if container.streams.video:
-                        container.close()
-                        rtsp_url = candidate
-                        mac = get_mac_address(ip) or ip
-                        serial_number = mac
-
-                        # Check if camera needs naming
-                        import json
-                        import os
-                        needs_naming = True
-                        if os.path.exists("config/cameras.json"):
-                            try:
-                                with open("config/cameras.json", "r", encoding="utf-8") as f:
-                                    config = json.load(f)
-                                    if serial_number in config or ip in config:
-                                        needs_naming = False
-                            except Exception:
-                                pass
-
-                        print(f"📷 [IP: {ip}] พบกล้องผ่าน RTSP Direct (URL: {rtsp_url})")
-                        if self.on_camera_found:
-                            self.on_camera_found(ip, rtsp_url, needs_naming, None, serial_number)
-                        return
-                except Exception:
-                    pass
+            rtsp_url = cam.get("rtsp_url")
+            serial_number = cam.get("serial_number") or ip
+            if rtsp_url and not self._needs_naming(serial_number, ip) and self.check_port(ip, 554, timeout=0.4):
+                print(f"⚡ [Startup Cache] เชื่อมต่อกล้อง {ip} ทันที")
+                if self.on_camera_found:
+                    self.on_camera_found(ip, rtsp_url, False, None, serial_number)
+            elif self.check_port(ip, 554, timeout=0.4) or self.check_port(ip, 80, timeout=0.3):
+                threading.Thread(target=self.get_onvif, args=(ip, None), daemon=True).start()
 
     def _queue_reader_loop(self):
         """Thread ที่คอยอ่านผลจาก scanner process → เรียก get_onvif() บน main process
@@ -441,7 +535,13 @@ class NetworkScanner:
         print("🛑 [Queue Reader] หยุดทำงาน")
 
     def start_scanning(self):
-        """เริ่มสแกนกล้องแบบ multiprocessing — ใช้ 1 core สำหรับ port scanning"""
+        """เริ่มสแกนกล้องแบบ multiprocessing — พร้อมเชื่อมกล้องที่เคยรู้จักทันที"""
+        threading.Thread(
+            target=self._probe_cached_cameras,
+            daemon=True,
+            name="CachedCamProbe",
+        ).start()
+
         # เริ่ม scanner process (1 core แยก)
         self._scanner_process = multiprocessing.Process(
             target=_scanner_process_loop,

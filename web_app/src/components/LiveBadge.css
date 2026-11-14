@@ -4,19 +4,34 @@
   gap: 6px;
   padding: 4px 10px;
   border-radius: var(--radius-full);
-  background: rgba(0, 212, 170, 0.12);
-  color: var(--teal);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.live-badge.online {
+  background: var(--teal-glow);
+  color: var(--teal-text);
+}
+
+.live-badge.offline {
+  background: var(--warning-glow);
+  color: var(--warning-text);
 }
 
 .live-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+}
+
+.live-badge.online .live-dot {
   background: var(--teal);
-  box-shadow: 0 0 6px var(--teal-glow);
-  animation: pulse 1.5s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.live-badge.offline .live-dot {
+  background: var(--warning);
 }

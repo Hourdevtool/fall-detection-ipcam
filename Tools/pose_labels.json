@@ -13,20 +13,22 @@
     "3": "bend",
     "4": "fall"
   },
-  "total_samples": 5640,
+  "n_features": 63,
+  "total_samples": 206185,
   "samples_per_class": {
-    "walk": 1128,
-    "stand": 1128,
-    "sit": 1128,
-    "bend": 1128,
-    "fall": 1128
+    "walk": 5436,
+    "stand": 33699,
+    "sit": 82117,
+    "bend": 3465,
+    "fall": 81468
   },
   "model_file": "multipose_model.pkl",
-  "accuracy": 0.7890070921985816,
-  "cv_mean": 0.8003546099290781,
-  "cv_std": 0.009030377005848828,
+  "model_type": "HistGradientBoostingClassifier",
+  "accuracy": 0.8742053877707678,
+  "sit_to_fall_rate": 0.04113687359760658,
+  "cv_mean": 0.8786285930062213,
+  "cv_std": 0.0065444130735220225,
   "n_classes": 5,
-  "n_features": 34,
-  "train_samples": 4512,
-  "test_samples": 1128
+  "train_samples": 164498,
+  "test_samples": 41687
 }

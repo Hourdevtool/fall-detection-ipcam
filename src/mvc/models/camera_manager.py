@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from src.services.playvideo import play_stream_pyav
 
 class CameraManager:
@@ -13,9 +14,46 @@ class CameraManager:
         self.camera_names = {}
         self.camera_configs = {}     # 📷 Per-camera config (dual camera, split mode, etc.)
         self.pending_naming = set()
+        self.serial_to_ip = {}       # Map serial_number -> active IP (for DHCP IP changes)
+        self.camera_cache = {}       # Cached {serial_number: {"ip": ..., "rtsp_url": ..., "port": ...}}
         self._lock = threading.Lock()
         self.config_file = "config/cameras.json"
+        self.cache_file = "config/camera_cache.json"
         self._load_names()
+        self._load_cache()
+
+    def _load_cache(self):
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.camera_cache = data
+            except Exception:
+                self.camera_cache = {}
+
+    def save_camera_cache(self, serial_number, ip, rtsp_url, port=None):
+        key = serial_number or ip
+        if not key or not ip or not rtsp_url:
+            return
+        with self._lock:
+            self.camera_cache[key] = {
+                "serial_number": serial_number or ip,
+                "ip": ip,
+                "rtsp_url": rtsp_url,
+                "port": port,
+                "last_seen": time.time(),
+            }
+            try:
+                os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+                with open(self.cache_file, "w", encoding="utf-8") as f:
+                    json.dump(self.camera_cache, f, ensure_ascii=False, indent=4)
+            except Exception:
+                pass
+
+    def get_cached_cameras(self):
+        with self._lock:
+            return [dict(v) for v in self.camera_cache.values()]
 
     def is_pending_or_active(self, ip, serial_number=None):
         with self._lock:
@@ -95,16 +133,38 @@ class CameraManager:
         with open(self.config_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
 
-    def start_stream(self, ip, rtsp_url, serial_number=None):
-        if self.active_cameras.get(ip, False):
-            return
+    def stop_stream(self, ip, remove_from_ui=False):
+        with self._lock:
+            self.active_cameras[ip] = False
+            self.frame_buffer.pop(ip, None)
+            self.frame_buffer_b64.pop(ip, None)
+            if remove_from_ui:
+                self.active_cameras.pop(ip, None)
+                self.camera_names.pop(ip, None)
 
-        self.active_cameras[ip] = True
+    def start_stream(self, ip, rtsp_url, serial_number=None):
+        with self._lock:
+            if self.active_cameras.get(ip, False):
+                return
+
+            # If this camera reconnected under a new DHCP IP, cleanly retire the old IP stream
+            if serial_number:
+                old_ip = self.serial_to_ip.get(serial_number)
+                if old_ip and old_ip != ip:
+                    self.active_cameras.pop(old_ip, None)
+                    self.frame_buffer.pop(old_ip, None)
+                    self.frame_buffer_b64.pop(old_ip, None)
+                    self.camera_names.pop(old_ip, None)
+                self.serial_to_ip[serial_number] = ip
+
+            self.active_cameras[ip] = True
+            camera_config = self.camera_configs.get(ip) or self.camera_configs.get(serial_number)
+
+        self.save_camera_cache(serial_number, ip, rtsp_url)
         # ใช้ threading.Thread แทน multiprocessing.Process
         # → แชร์ dict เดียวกันได้โดยตรง ไม่ต้องผ่าน Manager proxy
         # 🚀 ส่ง frame_buffer_b64 เพิ่มเพื่อให้ camera thread pre-encode base64
         # 📷 ส่ง camera_config สำหรับ dual camera (FNK-D14Z etc.)
-        camera_config = self.camera_configs.get(ip) or self.camera_configs.get(serial_number)
         t = threading.Thread(
             target=play_stream_pyav,
             args=(ip, rtsp_url, self.active_cameras, self.frame_buffer, self.camera_names, self.frame_buffer_b64),

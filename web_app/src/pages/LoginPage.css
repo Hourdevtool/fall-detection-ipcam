@@ -1,180 +1,275 @@
 .login-page {
+  min-height: 100dvh;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+.login-bg-mesh {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(640px circle at 12% 18%, var(--accent-glow), transparent 60%),
+    radial-gradient(520px circle at 88% 82%, var(--teal-glow), transparent 58%);
+}
+
+.login-topbar {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: calc(var(--safe-top) + 16px) var(--space-md) 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (min-width: 640px) {
+  .login-topbar {
+    padding: 24px var(--space-lg) 12px;
+  }
+}
+
+.login-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.login-topbar-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+}
+
+.login-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--space-md) var(--space-md) calc(var(--safe-bottom) + var(--space-xl));
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-xl);
+  align-items: center;
+}
+
+@media (min-width: 640px) {
+  .login-main {
+    padding: var(--space-lg) var(--space-lg) var(--space-2xl);
+  }
+}
+
+@media (min-width: 920px) {
+  .login-main {
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 48px;
+  }
+}
+
+/* ── Hero Column ── */
+.login-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.login-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  background: var(--accent-glow);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-md);
+}
+
+.login-title {
+  font-size: clamp(1.65rem, 3.2vw, 2.5rem);
+  font-weight: 800;
+  color: var(--text-1);
+  letter-spacing: -0.025em;
+  line-height: 1.22;
+  margin-bottom: var(--space-md);
+  text-wrap: balance;
+}
+
+.login-subtitle {
+  font-size: 0.95rem;
+  color: var(--text-2);
+  line-height: 1.65;
+  max-width: 56ch;
+  margin-bottom: var(--space-xl);
+}
+
+.login-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 540px;
+}
+
+@media (max-width: 919px) {
+  .login-highlights {
+    display: none;
+  }
+
+  .login-subtitle {
+    margin-bottom: 0;
+  }
+}
+
+.login-highlight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  border: 1px solid var(--border-subtle);
+}
+
+.login-highlight-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--accent-glow);
+  color: var(--accent-text);
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100dvh;
-  position: relative;
-  overflow: hidden;
-  padding: var(--space-lg);
+  flex-shrink: 0;
 }
 
-/* Background glow orbs */
-.login-bg-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.4;
-  pointer-events: none;
+.login-highlight-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 2px;
 }
 
-.login-bg-glow-1 {
-  width: 300px;
-  height: 300px;
-  background: var(--accent);
-  top: -100px;
-  right: -100px;
-  opacity: 0.15;
+.login-highlight-desc {
+  font-size: 0.8125rem;
+  color: var(--text-2);
+  line-height: 1.5;
 }
 
-.login-bg-glow-2 {
-  width: 250px;
-  height: 250px;
-  background: var(--teal);
-  bottom: -80px;
-  left: -80px;
-  opacity: 0.1;
-}
-
-.login-content {
+/* ── Sign-in Card ── */
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: var(--space-xl) var(--space-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  max-width: 360px;
-  width: 100%;
-  z-index: 1;
 }
 
-/* Logo */
-.login-logo {
-  position: relative;
-  margin-bottom: var(--space-lg);
+@media (min-width: 640px) {
+  .login-card {
+    padding: 36px 32px;
+  }
 }
 
-.login-logo-icon {
-  font-size: 64px;
-  line-height: 1;
-  animation: float 4s ease-in-out infinite;
+.login-card-logo {
+  margin-bottom: var(--space-md);
 }
 
-.login-logo-glow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  background: var(--gradient);
-  filter: blur(40px);
-  opacity: 0.25;
+.login-card-heading {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 8px;
 }
 
-/* Title */
-.login-title {
-  font-size: 36px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  background: var(--gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: var(--space-sm);
-}
-
-.login-subtitle {
-  font-size: 16px;
+.login-card-desc {
+  font-size: 0.875rem;
   color: var(--text-2);
-  line-height: 1.6;
-  margin-bottom: var(--space-2xl);
+  line-height: 1.55;
+  margin-bottom: var(--space-lg);
+  max-width: 34ch;
 }
 
-/* Actions */
 .login-actions {
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
-  width: 100%;
+  align-items: center;
 }
 
-.login-google-btn {
+.login-google-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 0;
+}
+
+.login-google-wrap.is-loading {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.login-loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--text-2);
+}
+
+.login-config-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--warning-glow);
+  color: var(--warning-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.login-error {
+  margin-top: var(--space-md);
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  width: 100%;
-  padding: 14px 24px;
-  background: white;
-  color: #1a1a1a;
-  border-radius: var(--radius-md);
-  font-size: 15px;
-  font-weight: 600;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
-}
-
-.login-google-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-}
-
-.login-google-btn:active {
-  transform: translateY(0);
-}
-
-.login-google-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.login-google-btn.disabled-config {
-  background: var(--surface) !important;
-  border: 1px dashed var(--glass-border) !important;
-  color: var(--text-3) !important;
-  box-shadow: none !important;
-}
-
-.login-google-btn.disabled-config:hover {
-  background: var(--glass-hover) !important;
-  color: var(--text-2) !important;
-  transform: none !important;
-}
-
-.google-icon {
-  flex-shrink: 0;
-}
-
-.login-dev-btn {
-  padding: 12px 24px;
-  background: var(--glass);
-  color: var(--text-2);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 500;
-  transition: all 0.2s ease;
-}
-
-.login-dev-btn:hover {
-  background: var(--glass-hover);
-  color: var(--text-1);
-}
-
-/* Error */
-.login-error {
-  margin-top: var(--space-md);
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 10px 14px;
   background: var(--danger-glow);
-  border: 1px solid rgba(255, 71, 87, 0.2);
-  border-radius: var(--radius-sm);
-  color: var(--danger);
-  font-size: 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  color: var(--danger-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
 }
 
-/* Version */
-.login-version {
-  margin-top: var(--space-2xl);
-  font-size: 12px;
+.login-card-footer {
+  width: 100%;
+  margin-top: var(--space-xl);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
   color: var(--text-3);
 }

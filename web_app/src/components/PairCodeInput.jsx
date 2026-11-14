@@ -1,31 +1,28 @@
 import { useState, useRef, useEffect } from 'react';
 import './PairCodeInput.css';
 
-export default function PairCodeInput({ length = 6, onComplete }) {
+export default function PairCodeInput({ length = 6, onComplete, disabled = false }) {
   const [values, setValues] = useState(Array(length).fill(''));
   const inputRefs = useRef([]);
 
   useEffect(() => {
-    // Auto-focus first input
     if (inputRefs.current[0]) {
       inputRefs.current[0].focus();
     }
   }, []);
 
   function handleChange(index, e) {
-    const val = e.target.value.replace(/\D/g, ''); // digits only
+    const val = e.target.value.replace(/\D/g, '');
     if (!val) return;
 
     const newValues = [...values];
-    newValues[index] = val[val.length - 1]; // take last digit
+    newValues[index] = val[val.length - 1];
     setValues(newValues);
 
-    // Move to next input
     if (index < length - 1) {
       inputRefs.current[index + 1]?.focus();
     }
 
-    // Check if complete
     const fullCode = newValues.join('');
     if (fullCode.length === length && !newValues.includes('')) {
       onComplete?.(fullCode);
@@ -43,6 +40,10 @@ export default function PairCodeInput({ length = 6, onComplete }) {
         setValues(newValues);
         inputRefs.current[index - 1]?.focus();
       }
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < length - 1) {
+      inputRefs.current[index + 1]?.focus();
     }
   }
 
@@ -55,10 +56,10 @@ export default function PairCodeInput({ length = 6, onComplete }) {
         newValues[i] = pasted[i];
       }
       setValues(newValues);
-      
+
       const nextIndex = Math.min(pasted.length, length - 1);
       inputRefs.current[nextIndex]?.focus();
-      
+
       if (pasted.length === length) {
         onComplete?.(pasted);
       }
@@ -66,19 +67,23 @@ export default function PairCodeInput({ length = 6, onComplete }) {
   }
 
   return (
-    <div className="pair-code-input">
+    <div className="pair-code-input" role="group" aria-label="รหัสจับคู่ 6 หลัก">
       {values.map((val, i) => (
         <input
           key={i}
-          ref={(el) => (inputRefs.current[i] = el)}
+          ref={(el) => {
+            inputRefs.current[i] = el;
+          }}
           type="tel"
           inputMode="numeric"
           maxLength={1}
           value={val}
+          disabled={disabled}
+          aria-label={`รหัสจับคู่หลักที่ ${i + 1}`}
           onChange={(e) => handleChange(i, e)}
           onKeyDown={(e) => handleKeyDown(i, e)}
           onPaste={handlePaste}
-          className={`pair-code-digit ${val ? 'filled' : ''}`}
+          className={`pair-code-digit mono ${val ? 'filled' : ''}`}
           autoComplete="off"
         />
       ))}

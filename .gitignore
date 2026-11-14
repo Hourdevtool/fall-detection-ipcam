@@ -10,7 +10,10 @@ build/
 wheels/
 *.egg-info
 .venv
-
+sa-workspace
+start_app.bat
+install_autostart.bat
+uninstall_autostart.bat
 # ── Node.js / Vite ──
 node_modules/
 dist/

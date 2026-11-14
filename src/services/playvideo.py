@@ -1,11 +1,15 @@
-import av
-import cv2
 import base64
-import numpy as np
 import json
 import os
+import re
+import socket
 import threading
 import time
+from urllib.parse import urlparse
+
+import av
+import cv2
+import numpy as np
 from detection import FallDetector
 from src.services.frame_splitter import FrameSplitter
 
@@ -60,30 +64,62 @@ def _get_shared_detector(on_fall_callback=None, on_intruder_callback=None):
     return _shared_detector
 
 
-# PyAV connection options — AUTO first (กล้องส่วนใหญ่ค้างถ้าบังคับ TCP/UDP)
+# Low-latency PyAV / FFmpeg options (FFmpeg 6+ uses 'timeout' in microseconds, not deprecated 'stimeout')
+_LOW_LATENCY_BASE_OPTS = {
+    'timeout': '2500000',
+    'fflags': 'nobuffer',
+    'flags': 'low_delay',
+    'probesize': '262144',
+    'analyzeduration': '500000',
+    'max_delay': '0',
+}
+
+# AUTO first (many cameras stall if TCP/UDP is forced upfront), then TCP & UDP fallbacks
 _AV_OPTIONS_LIST = [
-    {'stimeout': '2000000'},                                  # Auto (เร็วที่สุด)
-    {'rtsp_transport': 'tcp', 'stimeout': '2000000'},         # TCP fallback
-    {'rtsp_transport': 'udp', 'stimeout': '2000000'},         # UDP fallback
+    dict(_LOW_LATENCY_BASE_OPTS),
+    {**_LOW_LATENCY_BASE_OPTS, 'rtsp_transport': 'tcp'},
+    {**_LOW_LATENCY_BASE_OPTS, 'rtsp_transport': 'udp'},
 ]
 
+# Cache last known working (url, opts) per camera IP for sub-second reconnects
+_LAST_WORKING_STREAM = {}
+_LAST_WORKING_LOCK = threading.Lock()
+_BASE_BACKOFF_SEC = 1
+_MAX_BACKOFF_SEC = 5
+_STALL_TIMEOUT_SEC = 5.0
 
-def _open_stream(ip, rtsp_url):
-    """Try to open RTSP stream — ลอง URL จาก ONVIF ก่อน แล้วค่อยลอง fallback."""
-    import re
+
+def _tcp_reachable(rtsp_url, timeout=0.8):
+    """Fail fast in <1s when RTSP host is offline instead of hanging through all URL candidates."""
+    if not rtsp_url or not rtsp_url.lower().startswith("rtsp://"):
+        return True
+    try:
+        parsed = urlparse(rtsp_url)
+        host = parsed.hostname
+        port = parsed.port or 554
+        if not host:
+            return True
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+    except Exception:
+        return True
+
+
+def _build_candidate_urls(ip, rtsp_url):
+    """Order primary/ONVIF RTSP URL first, followed by common fallback paths without duplicates."""
     user = "admin"
     password = ""
     port = "554"
-
-    m = re.match(r'rtsp://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?(.*)', rtsp_url)
+    m = re.match(r'rtsp://([^:]+):([^@]*)@([^:/]+)(?::(\d+))?(.*)', rtsp_url or '')
     if m:
         user = m.group(1)
         password = m.group(2)
         ip = m.group(3)
         port = m.group(4) or "554"
 
-    # ลอง URL จาก ONVIF ก่อน (เป็น URL ที่ถูกต้องที่สุด) แล้วค่อยลอง fallback
-    candidate_urls = [
+    candidates = [
         rtsp_url,
         f"rtsp://{user}:{password}@{ip}:{port}/onvif1",
         f"rtsp://{user}:{password}@{ip}:{port}/onvif2",
@@ -92,30 +128,46 @@ def _open_stream(ip, rtsp_url):
         f"rtsp://{user}:{password}@{ip}:{port}/user={user}&password={password}&channel=1&stream=1.sdp",
         f"rtsp://{user}:{password}@{ip}:{port}/live/ch0",
     ]
-
-    # Remove duplicates
     seen = set()
-    unique = [u for u in candidate_urls if u and u not in seen and not seen.add(u)]
+    return [u for u in candidates if u and u not in seen and not seen.add(u)]
 
-    for candidate in unique:
+
+def _open_stream(ip, rtsp_url, active_cameras=None):
+    """Try to open RTSP stream quickly — tries cached working profile first and fails fast if offline."""
+    if not _tcp_reachable(rtsp_url, timeout=0.8):
+        return None, None
+
+    attempts = []
+    with _LAST_WORKING_LOCK:
+        cached = _LAST_WORKING_STREAM.get(ip)
+    if cached:
+        attempts.append(cached)
+
+    for candidate in _build_candidate_urls(ip, rtsp_url):
         for opts in _AV_OPTIONS_LIST:
-            proto = opts.get('rtsp_transport', 'auto').upper()
-            try:
-                container = av.open(candidate, 'r', options=opts)
-                if container.streams.video:
-                    print(f"✅ [สตรีม] IP: {ip} เชื่อมต่อสำเร็จด้วย {proto} ({candidate})")
-                    return container, proto
-                else:
-                    container.close()
-            except Exception:
-                pass
+            if cached and candidate == cached[0] and opts == cached[1]:
+                continue
+            attempts.append((candidate, opts))
+
+    for candidate, opts in attempts:
+        if active_cameras is not None and not active_cameras.get(ip, False):
+            return None, None
+        proto = opts.get('rtsp_transport', 'auto').upper()
+        try:
+            container = av.open(candidate, 'r', options=dict(opts), timeout=(2.5, _STALL_TIMEOUT_SEC))
+            if container.streams.video:
+                with _LAST_WORKING_LOCK:
+                    _LAST_WORKING_STREAM[ip] = (candidate, opts)
+                print(f"✅ [สตรีม] IP: {ip} เชื่อมต่อสำเร็จด้วย {proto} ({candidate})")
+                return container, proto
+            container.close()
+        except Exception:
+            if cached and (candidate, opts) == cached:
+                with _LAST_WORKING_LOCK:
+                    _LAST_WORKING_STREAM.pop(ip, None)
 
     print(f"❌ [สตรีม] IP: {ip} ไม่สามารถเชื่อมต่อ RTSP ได้")
     return None, None
-
-
-_MAX_RETRIES = 10
-_BASE_BACKOFF_SEC = 2
 
 
 def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, frame_buffer_b64=None, camera_config=None):
@@ -127,7 +179,7 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, f
             if os.path.exists("config/cameras.json"):
                 with open("config/cameras.json", "r", encoding="utf-8") as f:
                     camera_names = json.load(f)
-        except Exception as e:
+        except Exception:
             pass
 
     camera_name = camera_names.get(ip, ip)
@@ -150,17 +202,18 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, f
 
     retry_count = 0
 
-    while active_cameras.get(ip, False) and retry_count < _MAX_RETRIES:
+    # Auto-reconnect indefinitely whenever network/camera drops, until stop_stream sets active_cameras[ip] = False
+    while active_cameras.get(ip, False):
         if retry_count > 0:
-            backoff = min(10, _BASE_BACKOFF_SEC * retry_count)
-            print(f"🔄 [Reconnect] IP: {ip} — รอ {backoff}s ก่อน retry ({retry_count}/{_MAX_RETRIES})...")
+            backoff = min(_MAX_BACKOFF_SEC, _BASE_BACKOFF_SEC * retry_count)
+            print(f"🔄 [Reconnect] IP: {ip} — รอ {backoff}s ก่อนเชื่อมต่อใหม่ (ครั้งที่ {retry_count})...")
             for _ in range(int(backoff * 10)):
                 if not active_cameras.get(ip, False):
                     _cleanup(ip, frame_buffer, frame_buffer_b64)
                     return
                 time.sleep(0.1)
 
-        container, proto = _open_stream(ip, rtsp_url)
+        container, _proto = _open_stream(ip, rtsp_url, active_cameras=active_cameras)
         if container is None:
             retry_count += 1
             continue
@@ -179,6 +232,8 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, f
             pass
 
         if not stream_ok and active_cameras.get(ip, False):
+            # Clear frozen last frame so UI immediately switches to reconnecting state
+            _cleanup(ip, frame_buffer, frame_buffer_b64)
             retry_count += 1
         else:
             break
@@ -189,10 +244,9 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, f
 
 
 def _cleanup(ip, frame_buffer, frame_buffer_b64):
-    if ip in frame_buffer:
-        del frame_buffer[ip]
-    if frame_buffer_b64 is not None and ip in frame_buffer_b64:
-        del frame_buffer_b64[ip]
+    frame_buffer.pop(ip, None)
+    if frame_buffer_b64 is not None:
+        frame_buffer_b64.pop(ip, None)
 
 
 def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
@@ -200,13 +254,37 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
                          camera_config=None):
     splitter = FrameSplitter(camera_config)
 
-    latest_frame = [None]
+    latest_av_frame = [None]
+    raw_seq = [0]
+    ai_seq = [0]
+    bgr_cache = [0, None]  # [seq, bgr_ndarray]
+    frame_lock = threading.Lock()
+    convert_lock = threading.Lock()
+    frame_event = threading.Event()
     last_frame_time = [time.time()]
     running = [True]
     stream_died = [False]
-    heartbeat_time = [time.time()]
 
-    # ─── Reader thread (grabs fresh frames directly from RTSP) ───────────
+    def _get_latest_bgr():
+        with frame_lock:
+            seq = raw_seq[0]
+            av_f = latest_av_frame[0]
+        if av_f is None:
+            return 0, None
+        with convert_lock:
+            if bgr_cache[0] == seq and bgr_cache[1] is not None:
+                return seq, bgr_cache[1]
+            with frame_lock:
+                seq = raw_seq[0]
+                av_f = latest_av_frame[0]
+            if av_f is None:
+                return 0, None
+            bgr = av_f.to_ndarray(format="bgr24")
+            bgr_cache[0] = seq
+            bgr_cache[1] = bgr
+            return seq, bgr
+
+    # ─── Reader thread: drains RTSP packets immediately without BGR overhead ─
     def read_frames():
         consecutive_errors = 0
         try:
@@ -214,7 +292,8 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
                 stream_died[0] = True
                 return
             stream = container.streams.video[0]
-            stream.thread_type = "AUTO"
+            # SLICE/NONE avoids multi-frame reorder buffering latency inside FFmpeg decoder
+            stream.thread_type = "SLICE"
             for packet in container.demux(stream):
                 if not running[0] or not active_cameras.get(ip, False):
                     break
@@ -222,9 +301,12 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
                     continue
                 try:
                     for frame in packet.decode():
-                        latest_frame[0] = frame.to_ndarray(format="bgr24")
+                        with frame_lock:
+                            latest_av_frame[0] = frame
+                            raw_seq[0] += 1
                         last_frame_time[0] = time.time()
                         consecutive_errors = 0
+                        frame_event.set()
                 except Exception:
                     consecutive_errors += 1
                     if consecutive_errors > 100:
@@ -237,61 +319,64 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
             stream_died[0] = True
         finally:
             running[0] = False
+            frame_event.set()
 
     reader_thread = threading.Thread(target=read_frames, daemon=True, name=f"Reader-{ip}")
     reader_thread.start()
 
-    # ─── AI thread (optimized: alternates sub-frames to cut CPU in half) ─
-    ai_interval_sec = 0.08  # ~12 FPS AI inference
-
+    # ─── AI thread: event-driven zero-sleep latest-frame inference ─────────
     def ai_worker():
-        tick = 0
+        last_processed_seq = 0
         while running[0] and active_cameras.get(ip, False):
-            frame_img = latest_frame[0]
-            if frame_img is not None:
-                cam_name = camera_names.get(ip, camera_name)
-                try:
-                    sub_frames = splitter.split_frame(frame_img)
-                    
-                    if len(sub_frames) > 1:
-                        # Process both subframes efficiently
-                        for idx, (label, sub_frame) in enumerate(sub_frames):
-                            sub_id = f"{ip}_{label}"
-                            sub_name = f"{cam_name} ({label})"
-                            detector.process_frame(sub_frame, sub_name, camera_id=sub_id)
-                    else:
-                        label, sub_frame = sub_frames[0]
-                        detector.process_frame(sub_frame, cam_name, camera_id=ip)
-
-                    tick += 1
-                except Exception as e:
-                    pass
-            time.sleep(ai_interval_sec)
+            frame_event.wait(timeout=0.1)
+            frame_event.clear()
+            if not running[0] or not active_cameras.get(ip, False):
+                break
+            seq, frame_img = _get_latest_bgr()
+            if frame_img is None or seq == last_processed_seq:
+                continue
+            last_processed_seq = seq
+            cam_name = camera_names.get(ip, camera_name)
+            try:
+                sub_frames = splitter.split_frame(frame_img)
+                if len(sub_frames) > 1:
+                    for label, sub_frame in sub_frames:
+                        sub_id = f"{ip}_{label}"
+                        sub_name = f"{cam_name} ({label})"
+                        detector.process_frame(sub_frame, sub_name, camera_id=sub_id, draw=False)
+                else:
+                    _, sub_frame = sub_frames[0]
+                    detector.process_frame(sub_frame, cam_name, camera_id=ip, draw=False)
+                ai_seq[0] += 1
+            except Exception:
+                pass
 
     ai_thread = threading.Thread(target=ai_worker, daemon=True, name=f"AI-{ip}")
     ai_thread.start()
 
-    # ─── Display loop (smooth 30 FPS, crisp 960x540 resolution) ──────────
+    # ─── Display loop (up to 30 FPS, 960x540 crisp overlay) ─────────────────
     DISPLAY_W = 960
     DISPLAY_H = 540
+    last_disp_raw = 0
+    last_disp_ai = 0
+    last_encode_time = 0.0
 
     try:
         while running[0] and active_cameras.get(ip, False):
             now = time.time()
 
-            stall_duration = now - last_frame_time[0]
-            if stall_duration > 10.0:
+            if now - last_frame_time[0] > _STALL_TIMEOUT_SEC:
+                print(f"⚠️ [สตรีม {ip}] ไม่มีภาพเกิน {_STALL_TIMEOUT_SEC:.0f}s — กำลังเชื่อมต่อใหม่...")
                 stream_died[0] = True
                 running[0] = False
                 break
 
-            if now - heartbeat_time[0] > 60.0:
-                heartbeat_time[0] = now
-
-            raw = latest_frame[0]
-            display_frame = None
-
-            if raw is not None:
+            seq, raw = _get_latest_bgr()
+            cur_ai = ai_seq[0]
+            if raw is not None and (seq != last_disp_raw or cur_ai != last_disp_ai or now - last_encode_time > 0.25):
+                last_disp_raw = seq
+                last_disp_ai = cur_ai
+                last_encode_time = now
                 cam_name = camera_names.get(ip, camera_name)
                 sub_frames = splitter.split_frame(raw)
 
@@ -309,7 +394,6 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
                     display_frame = cv2.resize(raw, (DISPLAY_W, DISPLAY_H), interpolation=cv2.INTER_LINEAR)
                     display_frame = detector.draw_overlay(display_frame, cam_name, camera_id=ip)
 
-            if display_frame is not None:
                 jpeg_bytes = _encode_jpeg(display_frame, quality=75)
                 frame_buffer[ip] = jpeg_bytes
 
@@ -318,10 +402,11 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
 
             time.sleep(0.033)
 
-    except Exception as e:
+    except Exception:
         stream_died[0] = True
     finally:
         running[0] = False
+        frame_event.set()
 
     reader_thread.join(timeout=3.0)
     ai_thread.join(timeout=2.0)

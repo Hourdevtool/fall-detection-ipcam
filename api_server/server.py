@@ -303,25 +303,31 @@ async def get_single_frame(ip: str, current_user: dict = Depends(require_auth)):
 async def video_stream(ip: str):
     """MJPEG stream endpoint for real-time video without base64 overhead."""
     manager = get_camera_manager()
-    if not manager or not manager.active_cameras.get(ip, False):
+    if not manager or (not manager.active_cameras.get(ip, False) and ip not in manager.camera_names):
         raise HTTPException(status_code=404, detail="Camera not found or inactive")
 
     async def frame_generator():
         last_frame_data = None
+        inactive_wait = 0
         while True:
-            # ตรวจสอบว่ากล้องยังเปิดอยู่ไหม
+            # ตรวจสอบว่ากล้องยังเปิดอยู่หรือกำลังเชื่อมต่อใหม่อยู่ไหม
             if not manager.active_cameras.get(ip, False):
+                if ip in manager.camera_names and inactive_wait < 50:
+                    inactive_wait += 1
+                    await asyncio.sleep(0.1)
+                    continue
                 break
-                
+
+            inactive_wait = 0
             frame_data = manager.frame_buffer.get(ip)
-            # ส่งเฟรมใหม่เมื่อมีการเปลี่ยนแปลงเท่านั้น
-            if frame_data and frame_data != last_frame_data:
+            # ส่งเฟรมใหม่เมื่อมีการเปลี่ยนแปลงเท่านั้น (O(1) identity check)
+            if frame_data and frame_data is not last_frame_data:
                 last_frame_data = frame_data
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            
-            # หน่วงเวลาเล็กน้อยลดการใช้ CPU ของ loop (ประมาณ 30fps)
-            await asyncio.sleep(0.033)
+                await asyncio.sleep(0.025)
+            else:
+                await asyncio.sleep(0.033)
 
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 

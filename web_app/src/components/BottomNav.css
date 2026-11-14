@@ -3,28 +3,34 @@
   bottom: 0;
   left: 0;
   right: 0;
-  z-index: 100;
-  background: rgba(8, 8, 13, 0.85);
+  z-index: var(--z-nav);
+  background: var(--bg-nav);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid var(--glass-border);
+  border-top: 1px solid var(--border-subtle);
   padding-bottom: var(--safe-bottom);
 }
 
+@media (min-width: 960px) {
+  .bottom-nav {
+    display: none;
+  }
+}
+
 .bottom-nav-inner {
-  display: flex;
-  max-width: 600px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 560px;
   margin: 0 auto;
   height: var(--nav-height);
 }
 
 .nav-tab {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   text-decoration: none;
   color: var(--text-3);
   position: relative;
@@ -32,27 +38,33 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.nav-tab:hover {
+  color: var(--text-2);
+}
+
 .nav-tab.active {
-  color: var(--accent-light);
+  color: var(--accent-text);
 }
 
 .nav-tab-icon {
-  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
 }
 
 .nav-tab-label {
-  font-size: 11px;
+  font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 
 .nav-tab-indicator {
   position: absolute;
   top: 0;
-  left: 20%;
-  right: 20%;
-  height: 2px;
-  background: var(--gradient);
-  border-radius: 0 0 2px 2px;
+  left: 24%;
+  right: 24%;
+  height: 2.5px;
+  background: var(--accent);
+  border-radius: 0 0 3px 3px;
 }

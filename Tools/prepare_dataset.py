@@ -1,6 +1,6 @@
 r"""
 prepare_dataset.py -- Convert all dataset formats (CSV / JPG / AVI)
-into a single multipose_dataset.csv ready for training.
+into a clean, pose-invariant multipose_dataset.csv ready for training.
 
 5 Classes (no "resting"):
   0 = walk     (เดิน)
@@ -9,35 +9,51 @@ into a single multipose_dataset.csv ready for training.
   3 = bend     (ก้มเก็บของ)
   4 = fall     (ล้ม)
 
+Key improvements over legacy 34-feature extractor:
+  1. Uses 63 scale-, position-, and occlusion-invariant biomechanical features
+     from src.services.pose_features (pixel/uniform coordinates, not raw frame coords).
+  2. Filters Fall/{Bed,Chair,Stand} CSV sequences to exclude pre-fall upright frames.
+  3. Filters No Fall/Chair CSV sequences to seated frames.
+  4. Adds horizontal-flip & realistic lower-body/table-occlusion augmentations
+     (ankles/knees/hips/single-side masked) so sitting behind a desk is never
+     misclassified as a fall.
+  5. Records `group` IDs per source file so train/test split avoids data leakage.
+
 Usage:
-  cd d:\buff_p\Tools
-  python prepare_dataset.py
+  python Tools/prepare_dataset.py
 """
 
-import os
-import sys
 import csv
+import glob
 import json
+import os
 import random
+import sys
+
+import cv2
 import numpy as np
 
 # Force unbuffered output so logs appear in real-time
-sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
-# ────────────────────────────────────────────
-# CONFIG
-# ────────────────────────────────────────────
-DATASET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dataset")
-OUTPUT_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multipose_dataset.csv")
-LABELS_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pose_labels.json")
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(TOOLS_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# YOLOv8 Pose keypoint names ตามลำดับ
-KEYPOINT_NAMES = [
-    "Nose", "Left Eye", "Right Eye", "Left Ear", "Right Ear",
-    "Left Shoulder", "Right Shoulder", "Left Elbow", "Right Elbow",
-    "Left Wrist", "Right Wrist", "Left Hip", "Right Hip",
-    "Left Knee", "Right Knee", "Left Ankle", "Right Ankle"
-]
+from src.services.pose_features import (  # noqa: E402
+    KEYPOINT_NAMES,
+    POSE_FEATURE_DIM,
+    extract_pose_features,
+    safe_torso_angle_and_dy,
+)
+
+DATASET_DIR = os.path.join(TOOLS_DIR, "dataset")
+OUTPUT_CSV = os.path.join(TOOLS_DIR, "multipose_dataset.csv")
+LABELS_JSON = os.path.join(TOOLS_DIR, "pose_labels.json")
+
+KP_IDX = {name: i for i, name in enumerate(KEYPOINT_NAMES)}
 
 LABEL_MAP = {
     "walk": 0,
@@ -46,421 +62,338 @@ LABEL_MAP = {
     "bend": 3,
     "fall": 4,
 }
-
 LABEL_NAMES = {v: k for k, v in LABEL_MAP.items()}
 
-# จำนวน frames ที่จะสุ่มจากแต่ละ CSV (เพื่อลดข้อมูลที่เยอะเกิน)
-MAX_FRAMES_PER_CSV = 15
-
-# จำนวน frames ที่จะสุ่มจากแต่ละ video
-MAX_FRAMES_PER_VIDEO = 20
-
-# Target samples per class สำหรับ balancing
-TARGET_SAMPLES_PER_CLASS = None  # จะคำนวณอัตโนมัติจาก class ที่น้อยที่สุด
+MAX_FRAMES_PER_CSV = 10
+MAX_FRAMES_PER_VIDEO = 8
+MAX_WALK_VIDEOS = 250
+YOLO_IMG_SIZE = 480
 
 random.seed(42)
 np.random.seed(42)
 
 
-# ────────────────────────────────────────────
-# PART 1: แปลง CSV (แนวตั้ง) → rows (แนวนอน normalized)
-# ────────────────────────────────────────────
-def parse_vertical_csv(csv_path, max_frames=MAX_FRAMES_PER_CSV):
-    """
-    อ่าน CSV แนวตั้ง (Frame,Keypoint,X,Y,Confidence)
-    แปลงเป็น list ของ rows [x0,y0,x1,y1,...,x16,y16]
-    Normalize ค่า x,y ให้เป็น 0-1
-    """
-    frames_data = {}  # {frame_num: {keypoint_name: (x, y, conf)}}
-
+def parse_vertical_csv_sequence(csv_path, min_valid_kpts=10):
+    """Parse a (Frame, Keypoint, X, Y, Confidence) CSV into ordered [(fn, kpts, conf), ...]."""
+    frames = {}
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    frame_num = int(row["Frame"])
-                    kp_name = row["Keypoint"].strip()
+                    fn = int(row["Frame"])
+                    idx = KP_IDX.get(row["Keypoint"].strip())
+                    if idx is None:
+                        continue
                     x = float(row["X"])
                     y = float(row["Y"])
-                    conf = float(row["Confidence"])
-                    
-                    if frame_num not in frames_data:
-                        frames_data[frame_num] = {}
-                    frames_data[frame_num][kp_name] = (x, y, conf)
+                    c = float(row["Confidence"])
+                    if fn not in frames:
+                        frames[fn] = [
+                            np.zeros((17, 2), dtype=np.float32),
+                            np.zeros(17, dtype=np.float32),
+                        ]
+                    if c > frames[fn][1][idx]:
+                        frames[fn][0][idx] = [x, y]
+                        frames[fn][1][idx] = c
                 except (ValueError, KeyError):
                     continue
     except Exception as e:
         print(f"  ⚠️ Error reading {csv_path}: {e}")
         return []
 
-    if not frames_data:
-        return []
+    out = []
+    for fn in sorted(frames.keys()):
+        kpts, conf = frames[fn]
+        if int((conf > 0.30).sum()) >= min_valid_kpts:
+            out.append((fn, kpts, conf))
+    return out
 
-    # สุ่มเลือก frames
-    all_frame_nums = sorted(frames_data.keys())
-    if len(all_frame_nums) > max_frames:
-        selected_frames = sorted(random.sample(all_frame_nums, max_frames))
-    else:
-        selected_frames = all_frame_nums
 
+def hflip_kpts(kpts, conf):
+    """Horizontally mirror keypoints and swap left/right anatomical indices."""
+    k = kpts.copy()
+    c = conf.copy()
+    max_x = float(k[:, 0].max()) + 10.0
+    k[:, 0] = max_x - k[:, 0]
+    for a, b in [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12), (13, 14), (15, 16)]:
+        k[[a, b]] = k[[b, a]]
+        c[[a, b]] = c[[b, a]]
+    return k, c
+
+
+def augment_occlusion(kpts, conf, mode):
+    """Mask out subsets of keypoints to simulate furniture/table/side occlusion."""
+    k = kpts.copy()
+    c = conf.copy()
+    mask_map = {
+        "ankles": [15, 16],
+        "knees_ankles": [13, 14, 15, 16],
+        "hips_down": [11, 12, 13, 14, 15, 16],
+        "left_leg": [11, 13, 15],
+        "right_leg": [12, 14, 16],
+    }
+    idxs = mask_map[mode]
+    c[idxs] = 0.0
+    k[idxs] = 0.0
+    return k, c
+
+
+def build_group_rows(sample_pairs, cls_id, group_id, rng):
+    """Convert [(kpts, conf), ...] from a single clip/image into feature rows with augmentations."""
     rows = []
-    for frame_num in selected_frames:
-        kps = frames_data[frame_num]
-        
-        # ต้องมี keypoints ครบ 17 จุด
-        if len(kps) < 17:
-            continue
+    for kpts, conf in sample_pairs:
+        # Clean
+        rows.append(extract_pose_features(kpts, conf).tolist() + [group_id, cls_id])
+        # Horizontal mirror
+        kf, cf = hflip_kpts(kpts, conf)
+        rows.append(extract_pose_features(kf, cf).tolist() + [group_id, cls_id])
 
-        # หาค่า max x, y สำหรับ normalize
-        all_x = [kps[name][0] for name in KEYPOINT_NAMES if name in kps]
-        all_y = [kps[name][1] for name in KEYPOINT_NAMES if name in kps]
-        
-        if not all_x or not all_y:
-            continue
-            
-        max_x = max(all_x) if max(all_x) > 0 else 1.0
-        max_y = max(all_y) if max(all_y) > 0 else 1.0
+        if cls_id in (0, 1, 2, 3):
+            # All non-fall poses get realistic partial/lower-body occlusion augmentation
+            mode1 = rng.choice(["ankles", "knees_ankles", "hips_down", "left_leg", "right_leg"])
+            ko, co = augment_occlusion(kpts, conf, mode1)
+            rows.append(extract_pose_features(ko, co).tolist() + [group_id, cls_id])
 
-        # สร้าง row แนวนอน [x0,y0,x1,y1,...,x16,y16]
-        row = []
-        valid = True
-        for kp_name in KEYPOINT_NAMES:
-            if kp_name in kps:
-                x_norm = kps[kp_name][0] / max_x
-                y_norm = kps[kp_name][1] / max_y
-                row.extend([x_norm, y_norm])
-            else:
-                valid = False
-                break
-
-        if valid and len(row) == 34:
-            rows.append(row)
-
+            if cls_id == 2:
+                # Extra table-occlusion examples for sitting (knees+ankles & hips+down)
+                for sit_mode in ("knees_ankles", "hips_down"):
+                    ko2, co2 = augment_occlusion(kpts, conf, sit_mode)
+                    rows.append(extract_pose_features(ko2, co2).tolist() + [group_id, cls_id])
+                    ko2f, co2f = augment_occlusion(kf, cf, sit_mode)
+                    rows.append(extract_pose_features(ko2f, co2f).tolist() + [group_id, cls_id])
+        elif cls_id == 4:
+            # Falls can also have one side or ankles occluded while staying fallen
+            mode_f = rng.choice(["ankles", "left_leg", "right_leg"])
+            ko, co = augment_occlusion(kpts, conf, mode_f)
+            rows.append(extract_pose_features(ko, co).tolist() + [group_id, cls_id])
     return rows
 
 
-# ────────────────────────────────────────────
-# PART 2: แปลง JPG → keypoints ด้วย YOLOv8
-# ────────────────────────────────────────────
-def extract_keypoints_from_images(image_dir, yolo_model):
-    """
-    รัน YOLOv8 Pose บนรูปภาพแต่ละใบ
-    คืน list ของ rows [x0,y0,...,x16,y16] (normalized 0-1)
-    """
-    import cv2
-
-    rows = []
-    image_files = [f for f in os.listdir(image_dir) 
-                   if f.lower().endswith((".jpg", ".jpeg", ".png"))]
-
-    for img_file in image_files:
-        img_path = os.path.join(image_dir, img_file)
-        try:
-            frame = cv2.imread(img_path)
-            if frame is None:
-                continue
-
-            results = yolo_model(frame, verbose=False, conf=0.5)
-
-            if (results[0].keypoints is not None and 
-                len(results[0].keypoints) > 0):
-                kpts = results[0].keypoints.xyn[0].cpu().numpy()
-                row = kpts.flatten().tolist()
-                if len(row) == 34 and sum(row) > 0:
-                    rows.append(row)
-        except Exception as e:
-            continue
-
-    return rows
-
-
-# ────────────────────────────────────────────
-# PART 3: แปลง AVI → keypoints ด้วย YOLOv8
-# ────────────────────────────────────────────
-def extract_keypoints_from_videos(video_dir, yolo_model, max_frames_per_video=MAX_FRAMES_PER_VIDEO):
-    """
-    รัน YOLOv8 Pose บน frames ที่สุ่มจากแต่ละวิดีโอ
-    คืน list ของ rows [x0,y0,...,x16,y16] (normalized 0-1)
-    """
-    import cv2
-
-    rows = []
-    video_files = [f for f in os.listdir(video_dir) 
-                   if f.lower().endswith((".avi", ".mp4", ".mkv"))]
-
-    for i, vid_file in enumerate(video_files):
-        vid_path = os.path.join(video_dir, vid_file)
-        try:
-            cap = cv2.VideoCapture(vid_path)
-            if not cap.isOpened():
-                continue
-
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            if total_frames <= 0:
-                cap.release()
-                continue
-
-            # สุ่มเลือก frames
-            if total_frames > max_frames_per_video:
-                selected = sorted(random.sample(range(total_frames), max_frames_per_video))
-            else:
-                selected = list(range(total_frames))
-
-            for frame_idx in selected:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    continue
-
-                results = yolo_model(frame, verbose=False, conf=0.5)
-
-                if (results[0].keypoints is not None and 
-                    len(results[0].keypoints) > 0):
-                    kpts = results[0].keypoints.xyn[0].cpu().numpy()
-                    row = kpts.flatten().tolist()
-                    if len(row) == 34 and sum(row) > 0:
-                        rows.append(row)
-
-            cap.release()
-
-        except Exception as e:
-            print(f"  ⚠️ Error processing video {vid_file}: {e}")
-            continue
-
-        if (i + 1) % 50 == 0:
-            print(f"    Processed {i+1}/{len(video_files)} videos, {len(rows)} frames so far")
-
-    return rows
-
-
-# ────────────────────────────────────────────
-# PART 4: รวบรวมข้อมูลจากทุกแหล่ง
-# ────────────────────────────────────────────
-def collect_csv_data(base_dir, label_class):
-    """เก็บ keypoints จาก CSV files ใน directory (recursive)"""
-    all_rows = []
-    csv_files = []
-    
-    for root, dirs, files in os.walk(base_dir):
-        for f in files:
-            if f.lower().endswith(".csv"):
-                csv_files.append(os.path.join(root, f))
-
+def collect_fall_csvs(base_dir, rng):
+    """Collect ONLY truly fallen/falling frames from Fall/{Bed,Chair,Stand} CSV sequences."""
+    csv_files = sorted(glob.glob(os.path.join(base_dir, "**", "*.csv"), recursive=True))
     print(f"  พบ {len(csv_files)} CSV files")
-    
+    all_rows = []
     for i, csv_path in enumerate(csv_files):
-        rows = parse_vertical_csv(csv_path)
-        all_rows.extend(rows)
-        
-        if (i + 1) % 100 == 0:
-            print(f"    Processed {i+1}/{len(csv_files)} CSVs, {len(all_rows)} frames so far")
+        seq = parse_vertical_csv_sequence(csv_path)
+        if not seq:
+            continue
+        init_hs = [
+            seq[j][1][seq[j][2] > 0.30, 1].max() - seq[j][1][seq[j][2] > 0.30, 1].min()
+            for j in range(min(3, len(seq)))
+            if (seq[j][2] > 0.30).any()
+        ]
+        base_h = float(np.median(init_hs)) if init_hs else 200.0
+        fallen = []
+        for idx, (_fn, kpts, conf) in enumerate(seq):
+            valid = conf > 0.30
+            xs, ys = kpts[valid, 0], kpts[valid, 1]
+            w = float(xs.max() - xs.min())
+            h = float(ys.max() - ys.min())
+            ar = w / max(h, 1e-4)
+            ang, dy_signed, _ = safe_torso_angle_and_dy(kpts, valid)
+            if ang is None:
+                continue
+            if (
+                ang > 50.0
+                or ar > 1.25
+                or dy_signed <= 0.05 * max(base_h, 1.0)
+                or (h < 0.55 * base_h and idx >= len(seq) // 3)
+            ):
+                fallen.append((kpts, conf))
+        if fallen:
+            chosen = rng.sample(fallen, min(MAX_FRAMES_PER_CSV, len(fallen)))
+            gid = f"csv_fall_{os.path.relpath(csv_path, DATASET_DIR)}"
+            all_rows.extend(build_group_rows(chosen, 4, gid, rng))
+        if (i + 1) % 200 == 0:
+            print(f"    Processed {i+1}/{len(csv_files)} CSVs, {len(all_rows)} samples so far")
+    print(f"  ✅ ได้ {len(all_rows)} samples (clean fallen frames + aug)")
+    return all_rows
 
-    print(f"  ✅ ได้ {len(all_rows)} frames จาก CSV")
+
+def collect_nofall_csvs(base_dir, cls_id, rng, skip_initial_fraction=0.0):
+    """Collect upright Stand or seated Chair samples from No Fall CSV sequences."""
+    csv_files = sorted(glob.glob(os.path.join(base_dir, "**", "*.csv"), recursive=True))
+    print(f"  พบ {len(csv_files)} CSV files")
+    all_rows = []
+    for i, csv_path in enumerate(csv_files):
+        seq = parse_vertical_csv_sequence(csv_path)
+        if not seq:
+            continue
+        start_idx = int(len(seq) * skip_initial_fraction)
+        subset = seq[start_idx:] or seq
+        chosen_seq = rng.sample(subset, min(MAX_FRAMES_PER_CSV, len(subset)))
+        pairs = [(k, c) for _, k, c in chosen_seq]
+        gid = f"csv_{cls_id}_{os.path.relpath(csv_path, DATASET_DIR)}"
+        all_rows.extend(build_group_rows(pairs, cls_id, gid, rng))
+        if (i + 1) % 200 == 0:
+            print(f"    Processed {i+1}/{len(csv_files)} CSVs, {len(all_rows)} samples so far")
+    print(f"  ✅ ได้ {len(all_rows)} samples")
+    return all_rows
+
+
+def collect_archive_images(folder_dir, cls_id, yolo_model, rng, prefix):
+    """Extract keypoints from image folders using YOLOv8-Pose in pixel space."""
+    exts = (".jpg", ".jpeg", ".png", ".bmp")
+    img_files = sorted(
+        f for f in os.listdir(folder_dir) if f.lower().endswith(exts)
+    )
+    print(f"  พบ {len(img_files)} รูปภาพ")
+    all_rows = []
+    for i, fname in enumerate(img_files):
+        fpath = os.path.join(folder_dir, fname)
+        img = cv2.imread(fpath)
+        if img is None:
+            continue
+        results = yolo_model(img, verbose=False, conf=0.35, imgsz=YOLO_IMG_SIZE)
+        if results[0].keypoints is not None and len(results[0].keypoints) > 0:
+            kpts = results[0].keypoints.xy[0].cpu().numpy()
+            conf = results[0].keypoints.conf[0].cpu().numpy()
+            if int((conf > 0.30).sum()) >= 5:
+                gid = f"img_{prefix}_{fname}"
+                all_rows.extend(build_group_rows([(kpts, conf)], cls_id, gid, rng))
+        if (i + 1) % 300 == 0:
+            print(f"    Processed {i+1}/{len(img_files)} images, {len(all_rows)} samples so far")
+    return all_rows
+
+
+def collect_archive_videos(folder_dir, cls_id, yolo_model, rng, prefix, max_videos=None):
+    """Extract sampled frames from AVI/MP4 folders using YOLOv8-Pose in pixel space."""
+    exts = (".avi", ".mp4", ".mov", ".mkv")
+    vid_files = sorted(
+        f for f in os.listdir(folder_dir) if f.lower().endswith(exts)
+    )
+    if max_videos and len(vid_files) > max_videos:
+        rng.shuffle(vid_files)
+        vid_files = vid_files[:max_videos]
+    print(f"  พบ/ใช้ {len(vid_files)} วิดีโอ")
+    all_rows = []
+    for i, fname in enumerate(vid_files):
+        fpath = os.path.join(folder_dir, fname)
+        cap = cv2.VideoCapture(fpath)
+        if not cap.isOpened():
+            continue
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total <= 0:
+            cap.release()
+            continue
+        indices = (
+            sorted(rng.sample(range(total), MAX_FRAMES_PER_VIDEO))
+            if total > MAX_FRAMES_PER_VIDEO
+            else list(range(total))
+        )
+        pairs = []
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            results = yolo_model(frame, verbose=False, conf=0.35, imgsz=YOLO_IMG_SIZE)
+            if results[0].keypoints is not None and len(results[0].keypoints) > 0:
+                kpts = results[0].keypoints.xy[0].cpu().numpy()
+                conf = results[0].keypoints.conf[0].cpu().numpy()
+                if int((conf > 0.30).sum()) >= 6:
+                    pairs.append((kpts, conf))
+        cap.release()
+        if pairs:
+            gid = f"vid_{prefix}_{fname}"
+            all_rows.extend(build_group_rows(pairs, cls_id, gid, rng))
+        if (i + 1) % 50 == 0:
+            print(f"    Processed {i+1}/{len(vid_files)} videos, {len(all_rows)} samples so far")
     return all_rows
 
 
 def main():
+    rng = random.Random(42)
     print("=" * 60)
-    print("  🔄 PREPARE MULTI-POSE DATASET")
+    print("  🔄 PREPARE MULTI-POSE DATASET (63 Pose-Invariant Features)")
     print("  5 Classes: walk(0) / stand(1) / sit(2) / bend(3) / fall(4)")
     print("=" * 60)
     print()
 
-    # เก็บข้อมูลแต่ละ class
-    class_data = {
-        0: [],  # walk
-        1: [],  # stand
-        2: [],  # sit
-        3: [],  # bend
-        4: [],  # fall
-    }
+    class_data = {0: [], 1: [], 2: [], 3: [], 4: []}
 
-    # ────────────────────────────────────
-    # ส่วนที่ 1: CSV keypoints (Fall / No Fall)
-    # ────────────────────────────────────
-    print("━" * 50)
-    print("📂 ส่วนที่ 1: CSV Keypoints (Fall / No Fall)")
-    print("━" * 50)
-
-    # Fall → class 4 (fall)
+    # 1. CSV datasets
     for subfolder in ["Bed", "Chair", "Stand"]:
         path = os.path.join(DATASET_DIR, "Fall", subfolder)
         if os.path.exists(path):
-            print(f"\n🔴 Fall/{subfolder} → class 4 (fall)")
-            rows = collect_csv_data(path, LABEL_MAP["fall"])
-            class_data[4].extend(rows)
+            print(f"\n🔴 Fall/{subfolder} → class 4 (fall, cleaned)")
+            class_data[4].extend(collect_fall_csvs(path, rng))
 
-    # No Fall/Stand → class 1 (stand)
     nf_stand = os.path.join(DATASET_DIR, "No Fall", "Stand")
     if os.path.exists(nf_stand):
-        print(f"\n🟢 No Fall/Stand → class 1 (stand)")
-        rows = collect_csv_data(nf_stand, LABEL_MAP["stand"])
-        class_data[1].extend(rows)
+        print("\n🟢 No Fall/Stand → class 1 (stand)")
+        class_data[1].extend(collect_nofall_csvs(nf_stand, 1, rng))
 
-    # No Fall/Chair → class 2 (sit)
     nf_chair = os.path.join(DATASET_DIR, "No Fall", "Chair")
     if os.path.exists(nf_chair):
-        print(f"\n🟢 No Fall/Chair → class 2 (sit)")
-        rows = collect_csv_data(nf_chair, LABEL_MAP["sit"])
-        class_data[2].extend(rows)
+        print("\n🟢 No Fall/Chair → class 2 (sit)")
+        class_data[2].extend(collect_nofall_csvs(nf_chair, 2, rng, skip_initial_fraction=0.35))
 
-    # No Fall/Bed → ข้ามไม่ใช้ (ไม่แน่ใจว่าเป็นท่าอะไร)
-    print(f"\n⏭️  No Fall/Bed → ข้ามไม่ใช้")
-
-    # ────────────────────────────────────
-    # ส่วนที่ 2: รูปภาพ + วิดีโอ (archive)
-    # ────────────────────────────────────
-    print()
-    print("━" * 50)
-    print("📂 ส่วนที่ 2: Archive (JPG + AVI)")
-    print("━" * 50)
-
-    # ต้องโหลด YOLO สำหรับแปลง JPG/AVI
-    yolo_model = None
+    # 2. Archive JPG + AVI datasets
     archive_sources = {
-        # folder_name: (class_id, file_type)
-        "walk": (0, "video"),       # 548 AVI
-        "standing": (1, "image"),   # 1200 JPG
-        "sitting": (2, "image"),    # 1200 JPG
-        "sit": (2, "video"),        # 142 AVI
-        "bending": (3, "image"),    # 1200 JPG
+        "walk": (0, "video", MAX_WALK_VIDEOS),
+        "standing": (1, "image", None),
+        "sitting": (2, "image", None),
+        "sit": (2, "video", None),
+        "bending": (3, "image", None),
     }
 
-    has_media = False
-    for folder, (cls_id, ftype) in archive_sources.items():
-        path = os.path.join(DATASET_DIR, "archive", folder)
-        if os.path.exists(path):
-            has_media = True
-            break
-
+    has_media = any(
+        os.path.exists(os.path.join(DATASET_DIR, "archive", folder))
+        for folder in archive_sources
+    )
+    yolo_model = None
     if has_media:
         print("\n🤖 Loading YOLOv8 Pose model...")
-        try:
-            from ultralytics import YOLO  # type: ignore
-            yolo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolov8n-pose.pt")
-            yolo_model = YOLO(yolo_path)
-            print("  ✅ YOLO loaded")
-        except Exception as e:
-            print(f"  ❌ Cannot load YOLO: {e}")
-            print("  ⚠️ จะใช้เฉพาะข้อมูล CSV เท่านั้น")
+        from ultralytics import YOLO  # type: ignore
+
+        yolo_path = os.path.join(TOOLS_DIR, "yolov8n-pose.pt")
+        yolo_model = YOLO(yolo_path)
+        print("  ✅ YOLO loaded")
 
     if yolo_model:
-        for folder, (cls_id, ftype) in archive_sources.items():
+        for folder, (cls_id, ftype, cap_vids) in archive_sources.items():
             path = os.path.join(DATASET_DIR, "archive", folder)
             if not os.path.exists(path):
-                print(f"\n⏭️  archive/{folder} → ไม่พบ")
                 continue
-
-            label_name = LABEL_NAMES[cls_id]
-            print(f"\n🟡 archive/{folder} ({ftype}) → class {cls_id} ({label_name})")
-
+            print(f"\n🟡 archive/{folder} ({ftype}) → class {cls_id} ({LABEL_NAMES[cls_id]})")
             if ftype == "image":
-                rows = extract_keypoints_from_images(path, yolo_model)
-            else:  # video
-                rows = extract_keypoints_from_videos(path, yolo_model)
-
+                rows = collect_archive_images(path, cls_id, yolo_model, rng, folder)
+            else:
+                rows = collect_archive_videos(path, cls_id, yolo_model, rng, folder, max_videos=cap_vids)
             class_data[cls_id].extend(rows)
-            print(f"  ✅ ได้ {len(rows)} frames")
+            print(f"  ✅ ได้ {len(rows)} samples")
 
-    # ────────────────────────────────────
-    # สรุปก่อน balance
-    # ────────────────────────────────────
-    print()
-    print("━" * 50)
-    print("📊 สรุปข้อมูลก่อน Balance")
-    print("━" * 50)
-    
-    for cls_id, label_name in LABEL_NAMES.items():
-        count = len(class_data[cls_id])
-        print(f"  Class {cls_id} ({label_name:>6}): {count:>8} samples")
+    print("\n" + "━" * 50)
+    print("📊 สรุปจำนวน samples ทั้งหมด (พร้อม group IDs + occlusion aug):")
+    all_rows = []
+    for cls_id in range(5):
+        cnt = len(class_data[cls_id])
+        print(f"  Class {cls_id} ({LABEL_NAMES[cls_id]:>6}): {cnt:>8} samples")
+        all_rows.extend(class_data[cls_id])
 
-    # ────────────────────────────────────
-    # Balance ข้อมูล (undersampling)
-    # ────────────────────────────────────
-    print()
-    print("━" * 50)
-    print("⚖️  Balancing Dataset (Undersampling)")
-    print("━" * 50)
-
-    # หาจำนวน class ที่น้อยที่สุด (ที่มีข้อมูล > 0)
-    non_empty = {k: len(v) for k, v in class_data.items() if len(v) > 0}
-    
-    if len(non_empty) < 5:
-        missing = [LABEL_NAMES[k] for k in range(5) if k not in non_empty]
-        print(f"  ⚠️ ขาดข้อมูล class: {', '.join(missing)}")
-    
-    if not non_empty:
-        print("  ❌ ไม่มีข้อมูลเลย!")
-        return
-
-    min_count = min(non_empty.values())
-    target = min_count
-    print(f"  Target per class: {target} samples (based on smallest class)")
-
-    balanced_data = []
-    for cls_id in sorted(non_empty.keys()):
-        data = class_data[cls_id]
-        label_name = LABEL_NAMES[cls_id]
-        
-        if len(data) > target:
-            sampled = random.sample(data, target)
-        else:
-            sampled = data
-        
-        for row in sampled:
-            balanced_data.append(row + [cls_id])
-        
-        print(f"  Class {cls_id} ({label_name:>6}): {len(data):>8} → {len(sampled):>8} samples")
-
-    # Shuffle
-    random.shuffle(balanced_data)
-
-    # ────────────────────────────────────
-    # บันทึก CSV
-    # ────────────────────────────────────
-    print()
-    print("━" * 50)
-    print("💾 Saving Dataset")
-    print("━" * 50)
-
-    # Header
-    header = []
-    for i in range(17):
-        header.extend([f"x{i}", f"y{i}"])
-    header.append("class")
+    rng.shuffle(all_rows)
+    header = [f"f{i}" for i in range(POSE_FEATURE_DIM)] + ["group", "class"]
 
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(header)
-        writer.writerows(balanced_data)
+        writer.writerows(all_rows)
 
-    print(f"  ✅ Saved: {OUTPUT_CSV}")
-    print(f"  📝 Total samples: {len(balanced_data)}")
-    print(f"  📝 Features: 34 (17 keypoints × 2)")
-    print(f"  📝 Classes: {len(non_empty)}")
+    print(f"\n💾 Saved {len(all_rows)} rows ({POSE_FEATURE_DIM} features) -> {OUTPUT_CSV}")
 
-    # บันทึก label mapping
     labels_info = {
         "labels": LABEL_MAP,
-        "names": LABEL_NAMES,
-        "total_samples": len(balanced_data),
-        "samples_per_class": {
-            LABEL_NAMES[k]: min(len(class_data[k]), target) 
-            for k in sorted(non_empty.keys())
-        }
+        "names": {str(k): v for k, v in LABEL_NAMES.items()},
+        "n_features": POSE_FEATURE_DIM,
+        "total_samples": len(all_rows),
+        "samples_per_class": {LABEL_NAMES[k]: len(class_data[k]) for k in range(5)},
     }
-    # Convert int keys to string for JSON
-    labels_info["names"] = {str(k): v for k, v in LABEL_NAMES.items()}
-    
     with open(LABELS_JSON, "w", encoding="utf-8") as f:
         json.dump(labels_info, f, indent=2, ensure_ascii=False)
-
-    print(f"  ✅ Saved: {LABELS_JSON}")
-
-    print()
-    print("=" * 60)
-    print("  ✅ DONE! ขั้นตอนต่อไป: python train_multipose.py")
-    print("=" * 60)
+    print(f"✅ Saved metadata -> {LABELS_JSON}")
 
 
 if __name__ == "__main__":

@@ -7,12 +7,6 @@ import threading
 import os
 import json
 from dotenv import load_dotenv
-import requests
-import time
-import sys
-import threading
-import os
-from dotenv import load_dotenv
 
 # โหลดค่าจากไฟล์ .env
 load_dotenv()
@@ -32,92 +26,90 @@ LOCAL_PORT = int(os.getenv("LOCAL_PORT", "8000"))
 # ==========================================
 
 def update_firebase(url):
-    """ฟังก์ชันสำหรับอัปเดต URL ไปยัง Firebase Realtime Database แบบแยกตามอุปกรณ์"""
-    try:
-        # 1. อ่านไฟล์ system_config.json เพื่อดึง pair_code และ system_id
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "system_config.json")
-        system_id = "unknown"
-        pair_code = "unknown"
-        
-        if os.path.exists(config_path):
+    """ฟังก์ชันสำหรับอัปเดต URL ไปยัง Firebase Realtime Database แบบแยกตามอุปกรณ์ (พร้อม retry)"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "system_config.json")
+    system_id = "unknown"
+
+    if os.path.exists(config_path):
+        try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
                 system_id = config.get("system_id", "unknown")
-                pair_code = config.get("pair_code", "unknown")
-                
-        if system_id == "unknown":
-            print("❌ [ERROR] ไม่พบ system_id ใน system_config.json กรุณารันระบบหลักเพื่อสร้างรหัสก่อน")
-            return
+        except Exception:
+            pass
 
-        # 2. ตั้ง URL ปลายทางไปที่โฟลเดอร์ systems/{system_id}
-        firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE_PREFIX}/{system_id}.json"
-        
-        data = {
-            "url": url, 
-            "updated_at": time.time(),
-            "status": "online"
-        }
-        
-        # ส่ง HTTP PUT ไปยัง Firebase Realtime Database (อัปเดตหรือสร้างใหม่)
-        # ใช้ PATCH เพื่อไม่ให้ทับข้อมูลอื่นใน node นี้
-        response = requests.patch(firebase_url, json=data)
-        
-        if response.status_code == 200:
-            print(f"✅ [SUCCESS] อัปเดต URL ประจำกล้อง (System: {system_id}) ไปที่ Firebase สำเร็จ: {url}")
-        else:
-            print(f"❌ [ERROR] ไม่สามารถอัปเดต Firebase ได้. Status Code: {response.status_code}")
-            print(response.text)
-    except Exception as e:
-        print(f"❌ [ERROR] เกิดข้อผิดพลาดในการเชื่อมต่อ Firebase: {e}")
+    if system_id == "unknown":
+        print("❌ [ERROR] ไม่พบ system_id ใน system_config.json กรุณารันระบบหลักเพื่อสร้างรหัสก่อน")
+        return
+
+    firebase_url = f"{FIREBASE_DATABASE_URL}{DATABASE_NODE_PREFIX}/{system_id}.json"
+
+    for attempt in range(1, 6):
+        try:
+            data = {
+                "url": url,
+                "updated_at": time.time(),
+                "status": "online"
+            }
+            response = requests.patch(firebase_url, json=data, timeout=10)
+            if response.status_code == 200:
+                print(f"✅ [SUCCESS] อัปเดต URL ประจำกล้อง (System: {system_id}) ไปที่ Firebase สำเร็จ: {url}")
+                return
+            print(f"❌ [ERROR] ไม่สามารถอัปเดต Firebase ได้ (attempt {attempt}/5). Status Code: {response.status_code}")
+        except Exception as e:
+            print(f"❌ [ERROR] เชื่อมต่อ Firebase ไม่สำเร็จ (attempt {attempt}/5): {e}")
+
+        time.sleep(min(10, 2 * attempt))
 
 def run_cloudflared():
-    """ฟังก์ชันสำหรับรัน cloudflared และดักจับ URL"""
-    print(f"🚀 กำลังเริ่มต้น Cloudflare Tunnel สำหรับพอร์ต {LOCAL_PORT}...")
-    
-    # รันคำสั่ง cloudflared (ต้องติดตั้งโปรแกรม cloudflared ในเครื่อง Mini PC ก่อน)
-    # ใช้ 'cloudflared.exe' แทนเผื่อรันบน Windows แล้วหาไม่เจอ
-    command = ["cloudflared.exe", "tunnel", "--url", f"http://localhost:{LOCAL_PORT}"]
-    
-    # cloudflared จะพ่น log ออกมาทาง stderr
-    process = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
-    
-    # Regex สำหรับค้นหา URL แบบสุ่มของ TryCloudflare
+    """ฟังก์ชันสำหรับรัน cloudflared และดักจับ URL (รีสตาร์ทอัตโนมัติเมื่อเน็ตหลุด)"""
     url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
-    
     current_url = None
+    backoff = 2
 
-    try:
-        # เช็คให้แน่ใจว่า process.stderr มีอยู่จริง (ช่วยแก้ปัญหาแจ้งเตือน Type None is not iterable)
-        if process.stderr is not None:
-            # อ่าน Log แบบ Real-time
-            for line in process.stderr:
-                # print(line, end="") # ปลดคอมเมนต์บรรทัดนี้ถ้าอยากดู Log ทั้งหมดของ Cloudflare
-                
-                # ค้นหา URL ในบรรทัดนั้น
-                match = url_pattern.search(line)
-                
-                if match:
-                    found_url = match.group(0)
-                    # ถ้าเจอ URL ใหม่ที่ไม่ซ้ำกับของเดิม ให้อัปเดต
-                    if found_url != current_url:
-                        current_url = found_url
-                        print(f"\n🌐 [CLOUDFLARE] ได้รับ URL ใหม่: {current_url}")
-                        
-                        # บันทึก URL ลงไฟล์สำหรับให้ service อื่นในเครื่องเอาไปใช้ (เช่น ส่ง LINE)
-                        try:
-                            cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "cloudflare_url.txt")
-                            with open(cf_file, "w", encoding="utf-8") as f:
-                                f.write(current_url)
-                        except Exception as e:
-                            print(f"⚠️ ไม่สามารถบันทึกไฟล์ cloudflare_url.txt ได้: {e}")
-                        
-                        # อัปเดตขึ้น Firebase (ทำใน Background Thread จะได้ไม่บล็อกการอ่าน Log)
-                        threading.Thread(target=update_firebase, args=(current_url,)).start()
+    while True:
+        print(f"🚀 กำลังเริ่มต้น Cloudflare Tunnel สำหรับพอร์ต {LOCAL_PORT}...")
+        command = ["cloudflared.exe", "tunnel", "--url", f"http://localhost:{LOCAL_PORT}"]
+        process = None
 
-    except KeyboardInterrupt:
-        print("\n🛑 หยุดการทำงานของ Cloudflare Tunnel")
-        process.terminate()
-        sys.exit(0)
+        try:
+            process = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, universal_newlines=True)
+            if process.stderr is not None:
+                for line in process.stderr:
+                    match = url_pattern.search(line)
+                    if match:
+                        found_url = match.group(0)
+                        backoff = 2  # Reset backoff once tunnel obtains a URL
+                        if found_url != current_url:
+                            current_url = found_url
+                            print(f"\n🌐 [CLOUDFLARE] ได้รับ URL ใหม่: {current_url}")
+
+                            try:
+                                cf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "cloudflare_url.txt")
+                                with open(cf_file, "w", encoding="utf-8") as f:
+                                    f.write(current_url)
+                            except Exception as e:
+                                print(f"⚠️ ไม่สามารถบันทึกไฟล์ cloudflare_url.txt ได้: {e}")
+
+                            threading.Thread(target=update_firebase, args=(current_url,), daemon=True).start()
+
+            ret = process.wait()
+            print(f"⚠️ [CLOUDFLARE] Tunnel หยุดทำงาน (code={ret}) — กำลังเชื่อมต่อใหม่ใน {backoff}s...")
+        except KeyboardInterrupt:
+            print("\n🛑 หยุดการทำงานของ Cloudflare Tunnel")
+            if process is not None:
+                process.terminate()
+            sys.exit(0)
+        except Exception as e:
+            print(f"⚠️ [CLOUDFLARE] เกิดข้อผิดพลาด: {e} — กำลังเชื่อมต่อใหม่ใน {backoff}s...")
+            if process is not None:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+
+        time.sleep(backoff)
+        backoff = min(15, backoff + 2)
 
 if __name__ == "__main__":
     # ตรวจสอบว่าติดตั้ง requests หรือยัง
