@@ -140,6 +140,7 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
     import time
 
     print("🔄 [Scanner Process] เริ่มทำงานบน core แยก (multiprocessing)")
+    scan_round = 0
 
     while not stop_event.is_set():
         try:
@@ -151,7 +152,7 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
 
             # Phase 0: Check live ARP hosts first across PRIMARY_PORTS (<0.5s!)
             if arp_ips:
-                with ThreadPoolExecutor(max_workers=min(64, len(arp_ips))) as executor:
+                with ThreadPoolExecutor(max_workers=min(32, len(arp_ips))) as executor:
                     futures = {executor.submit(_check_ip_ports, ip, PRIMARY_PORTS, 0.25): ip for ip in arp_ips}
                     for future in futures:
                         if stop_event.is_set():
@@ -173,8 +174,8 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
                     if cand not in found_ips:
                         all_ips.append(cand)
 
-            # Phase 1: Fast scan on PRIMARY_PORTS across all subnet IPs (~3s per /24)
-            with ThreadPoolExecutor(max_workers=100) as executor:
+            # Phase 1: Fast scan on PRIMARY_PORTS across all subnet IPs
+            with ThreadPoolExecutor(max_workers=64) as executor:
                 futures = {executor.submit(_check_ip_ports, ip, PRIMARY_PORTS, 0.25): ip for ip in all_ips}
                 for future in futures:
                     if stop_event.is_set():
@@ -188,10 +189,10 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
                     except Exception:
                         pass
 
-            # Phase 2: Secondary ports only for remaining IPs
+            # Phase 2: Secondary ports only on initial scan or every 4th cycle to avoid flooding Wi-Fi/hotspot
             remaining_ips = [ip for ip in all_ips if ip not in found_ips]
-            if remaining_ips and not stop_event.is_set():
-                with ThreadPoolExecutor(max_workers=128) as executor:
+            if remaining_ips and (scan_round % 4 == 0) and not stop_event.is_set():
+                with ThreadPoolExecutor(max_workers=64) as executor:
                     futures = {executor.submit(_check_ip_ports, ip, SECONDARY_PORTS, 0.18): ip for ip in remaining_ips}
                     for future in futures:
                         if stop_event.is_set():
@@ -205,14 +206,15 @@ def _scanner_process_loop(result_queue: multiprocessing.Queue, stop_event: multi
                         except Exception:
                             pass
 
+            scan_round += 1
             # ส่งสัญญาณว่ารอบสแกนเสร็จแล้ว
             result_queue.put(("scan_complete", None, None))
 
         except Exception as e:
             print(f"❌ [Scanner Process] Error: {e}")
 
-        # รอ 4 วินาทีก่อนสแกนรอบถัดไป (ฟื้นตัวไวเมื่อเน็ต/WiFi กลับมา)
-        for _ in range(40):  # 40 x 0.1s = 4s
+        # รอ 15 วินาทีก่อนสแกนรอบถัดไป (ลดภาระ Wi-Fi/Hotspot ไม่ให้รบกวนสตรีม RTSP)
+        for _ in range(150):  # 150 x 0.1s = 15s
             if stop_event.is_set():
                 break
             time.sleep(0.1)
