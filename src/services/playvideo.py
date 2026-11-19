@@ -66,18 +66,18 @@ def _get_shared_detector(on_fall_callback=None, on_intruder_callback=None):
 
 # Low-latency PyAV / FFmpeg options (FFmpeg 6+ uses 'timeout' in microseconds, not deprecated 'stimeout')
 _LOW_LATENCY_BASE_OPTS = {
-    'timeout': '2500000',
+    'timeout': '5000000',
     'fflags': 'nobuffer',
     'flags': 'low_delay',
     'probesize': '262144',
     'analyzeduration': '500000',
-    'max_delay': '0',
+    'max_delay': '500000',
 }
 
-# AUTO first (many cameras stall if TCP/UDP is forced upfront), then TCP & UDP fallbacks
+# TCP first for reliable Wi-Fi/hotspot streaming, then AUTO & UDP fallbacks
 _AV_OPTIONS_LIST = [
-    dict(_LOW_LATENCY_BASE_OPTS),
     {**_LOW_LATENCY_BASE_OPTS, 'rtsp_transport': 'tcp'},
+    dict(_LOW_LATENCY_BASE_OPTS),
     {**_LOW_LATENCY_BASE_OPTS, 'rtsp_transport': 'udp'},
 ]
 
@@ -86,7 +86,7 @@ _LAST_WORKING_STREAM = {}
 _LAST_WORKING_LOCK = threading.Lock()
 _BASE_BACKOFF_SEC = 1
 _MAX_BACKOFF_SEC = 5
-_STALL_TIMEOUT_SEC = 5.0
+_STALL_TIMEOUT_SEC = 12.0
 
 
 def _tcp_reachable(rtsp_url, timeout=0.8):
@@ -232,6 +232,9 @@ def play_stream_pyav(ip, rtsp_url, active_cameras, frame_buffer, camera_names, f
             pass
 
         if not stream_ok and active_cameras.get(ip, False):
+            # Clear cached transport profile if stream stalled so reconnect can try TCP/AUTO fallback
+            with _LAST_WORKING_LOCK:
+                _LAST_WORKING_STREAM.pop(ip, None)
             # Clear frozen last frame so UI immediately switches to reconnecting state
             _cleanup(ip, frame_buffer, frame_buffer_b64)
             retry_count += 1
@@ -297,7 +300,7 @@ def _run_stream_pipeline(ip, container, detector, camera_names, camera_name,
             for packet in container.demux(stream):
                 if not running[0] or not active_cameras.get(ip, False):
                     break
-                if packet.dts is None:
+                if packet.dts is None and packet.pts is None:
                     continue
                 try:
                     for frame in packet.decode():

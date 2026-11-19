@@ -53,3 +53,6 @@ Thumbs.db
 
 # Config files
 config/
+
+# Audio cache
+/Tools/audio_cache/
