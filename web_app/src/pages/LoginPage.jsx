@@ -5,12 +5,14 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../hooks/useTheme';
 import ThemeToggle from '../components/ThemeToggle';
+import Modal from '../components/Modal';
 import {
   BrandLogo,
   IconVideo,
   IconBell,
   IconShieldCheck,
   IconAlert,
+  IconCheckCircle,
 } from '../components/Icons';
 import './LoginPage.css';
 
@@ -38,10 +40,16 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [agreeTerms, setAgreeTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   const isGoogleConfigured = !!import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   async function handleGoogleSuccess(tokenResponse) {
+    if (!agreeTerms) {
+      setError('กรุณากดยินยอมข้อกำหนดและเงื่อนไขการใช้งานก่อนเข้าสู่ระบบ');
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -127,14 +135,55 @@ export default function LoginPage() {
             ลงชื่อเข้าใช้ด้วยบัญชี Google เพื่อเชื่อมต่อกับเครื่องตรวจจับและดูภาพจากกล้อง
           </p>
 
+          <div className="login-terms-group">
+            <label className="login-terms-label">
+              <input
+                type="checkbox"
+                className="login-terms-checkbox"
+                checked={agreeTerms}
+                onChange={(e) => {
+                  setAgreeTerms(e.target.checked);
+                  if (error) setError('');
+                }}
+              />
+              <span className="login-terms-text">
+                ฉันได้อ่านและยินยอมตาม{' '}
+                <button
+                  type="button"
+                  className="login-terms-link"
+                  onClick={() => setShowTermsModal(true)}
+                >
+                  ข้อกำหนดและเงื่อนไขการใช้งาน (Terms of Service)
+                </button>{' '}
+                รวมถึงยินยอมให้ระบบถ่ายทอดและประมวลผลภาพจากกล้องเพื่อความปลอดภัย
+              </span>
+            </label>
+          </div>
+
           <div className="login-actions">
+            {!agreeTerms && (
+              <p className="login-terms-notice">
+                * โปรดทำเครื่องหมายยินยอมข้อกำหนดการใช้ภาพด้านบนก่อนดำเนินการเข้าสู่ระบบ
+              </p>
+            )}
+
             {isGoogleConfigured ? (
-              <div className={`login-google-wrap ${loading ? 'is-loading' : ''}`}>
+              <div
+                className={`login-google-wrap ${loading ? 'is-loading' : ''} ${
+                  !agreeTerms ? 'is-disabled' : ''
+                }`}
+                onClickCapture={(e) => {
+                  if (!agreeTerms) {
+                    e.stopPropagation();
+                    setError('กรุณากดยินยอมข้อกำหนดและเงื่อนไขการใช้งานก่อนเข้าสู่ระบบ');
+                  }
+                }}
+              >
                 <GoogleLogin
-                  key={theme}
+                  key={`${theme}-${agreeTerms}`}
                   onSuccess={handleGoogleSuccess}
                   onError={() => setError('การยืนยันตัวตนผ่าน Google ล้มเหลว กรุณาลองใหม่')}
-                  useOneTap
+                  useOneTap={agreeTerms}
                   theme={isDark ? 'filled_black' : 'outline'}
                   shape="pill"
                   size="large"
@@ -167,6 +216,73 @@ export default function LoginPage() {
           </div>
         </motion.section>
       </main>
+
+      {/* Terms of Service Modal */}
+      <Modal
+        open={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+        title="ข้อกำหนดและเงื่อนไขการใช้งาน (Terms of Service)"
+        subtitle="นโยบายความเป็นส่วนตัวและการยินยอมการประมวลผลข้อมูลภาพ"
+        maxWidth="620px"
+        footer={
+          <div className="terms-modal-footer">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setAgreeTerms(true);
+                setError('');
+                setShowTermsModal(false);
+              }}
+            >
+              <IconCheckCircle size={16} />
+              <span>ยินยอมและยอมรับข้อกำหนด</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setShowTermsModal(false)}
+            >
+              ปิดหน้าต่าง
+            </button>
+          </div>
+        }
+      >
+        <div className="terms-modal-content">
+          <section className="terms-section">
+            <h3 className="terms-title">1. วัตถุประสงค์ของการใช้งาน</h3>
+            <p>
+              ระบบ FallGuard AI เป็นระบบเฝ้าระวังและตรวจจับการล้มของผู้สูงอายุภายในบ้านด้วยปัญญาประดิษฐ์ (AI)
+              โดยมุ่งเน้นเพื่อความปลอดภัยและการแจ้งเตือนเหตุฉุกเฉินในครอบครัวเท่านั้น
+            </p>
+          </section>
+
+          <section className="terms-section">
+            <h3 className="terms-title">2. การยินยอมการถ่ายทอดและประมวลผลข้อมูลภาพ</h3>
+            <p>
+              ในการเข้าใช้งานเว็บแอปพลิเคชันนี้ ท่านยินยอมให้ระบบเข้าถึง ถ่ายทอดสัญญาณสตรีมวิดีโอสด (Live Video Stream)
+              และบันทึกภาพนิ่ง (Snapshot) จากกล้องวงจรปิดที่เชื่อมต่อกับเครื่อง เพื่อใช้ในการวิเคราะห์ท่าทางและส่งการแจ้งเตือน
+            </p>
+          </section>
+
+          <section className="terms-section">
+            <h3 className="terms-title">3. ความปลอดภัยและความเป็นส่วนตัวของข้อมูล</h3>
+            <p>
+              - การประมวลผลภาพด้วยโมเดล AI ดำเนินการบนเครื่องภายในเครือข่ายของท่านเอง (Edge Processing)<br />
+              - ภาพถ่ายเหตุการณ์จะถูกจัดเก็บบนเครื่องและส่งตรงไปยังช่องทางแจ้งเตือนของท่านโดยไม่มีการนำภาพไปเผยแพร่ต่อบุคคลภายนอก<br />
+              - ท่านมีสิทธิ์ในการลบ ปิดการเชื่อมต่อ หรือยกเลิกการจับคู่อุปกรณ์ได้ตลอดเวลาผ่านระบบจัดการอุปกรณ์
+            </p>
+          </section>
+
+          <section className="terms-section">
+            <h3 className="terms-title">4. การยืนยันความยินยอม</h3>
+            <p>
+              การทำเครื่องหมายในช่องยินยอมถือว่าท่านในฐานะผู้ครอบครองสถานที่หรือผู้ได้รับอนุญาต
+              ได้อ่าน เข้าใจ และตกลงปฏิบัติตามข้อกำหนดและเงื่อนไขการใช้งานเหล่านี้โดยสมบูรณ์
+            </p>
+          </section>
+        </div>
+      </Modal>
     </div>
   );
 }
