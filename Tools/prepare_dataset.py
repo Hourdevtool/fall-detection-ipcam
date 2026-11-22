@@ -356,6 +356,10 @@ def main():
     if yolo_model:
         for folder, (cls_id, ftype, cap_vids) in archive_sources.items():
             path = os.path.join(DATASET_DIR, "archive", folder)
+            if not os.path.exists(path) and folder == "sit":
+                alt_path = os.path.join(TOOLS_DIR, "sit")
+                if os.path.exists(alt_path):
+                    path = alt_path
             if not os.path.exists(path):
                 continue
             print(f"\n🟡 archive/{folder} ({ftype}) → class {cls_id} ({LABEL_NAMES[cls_id]})")

@@ -56,3 +56,23 @@ config/
 
 # Audio cache
 /Tools/audio_cache/
+
+# ── Documents, Reports & Diagrams ──
+*.doc
+*.docx
+*.pdf
+*.ppt
+*.pptx
+*.xls
+*.xlsx
+*.drawio
+~$*
+docs/flowchart/
+
+# ── Datasets, Videos & Generated Training Outputs ──
+Tools/sit/
+Tools/training_plots/
+Tools/multipose_dataset.csv
+*.avi
+*.mp4
+*.zip
